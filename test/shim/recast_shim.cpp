@@ -491,4 +491,77 @@ void shim_dump_detail(void* dmesh_ptr, Write write, void* user) {
     d.bytes(m.tris, (size_t)m.ntris * 4);
 }
 
+// The helpers Recast.h defines inline, called through functions so the tests
+// can compare them with the port's.
+float shim_min(float a, float b) { return rcMin(a, b); }
+float shim_max(float a, float b) { return rcMax(a, b); }
+float shim_clamp(float v, float mn, float mx) { return rcClamp(v, mn, mx); }
+int shim_clamp_int(int v, int mn, int mx) { return rcClamp(v, mn, mx); }
+int shim_float_to_int(float x) { return (int)x; }
+float shim_sqrt(float x) { return rcSqrt(x); }
+void shim_vcross(float* dest, const float* v1, const float* v2) { rcVcross(dest, v1, v2); }
+float shim_vdot(const float* v1, const float* v2) { return rcVdot(v1, v2); }
+void shim_vmad(float* dest, const float* v1, const float* v2, float s) {
+    rcVmad(dest, v1, v2, s);
+}
+void shim_vadd(float* dest, const float* v1, const float* v2) { rcVadd(dest, v1, v2); }
+void shim_vsub(float* dest, const float* v1, const float* v2) { rcVsub(dest, v1, v2); }
+void shim_vmin(float* mn, const float* v) { rcVmin(mn, v); }
+void shim_vmax(float* mx, const float* v) { rcVmax(mx, v); }
+void shim_vcopy(float* dest, const float* v) { rcVcopy(dest, v); }
+float shim_vdist(const float* v1, const float* v2) { return rcVdist(v1, v2); }
+float shim_vdist_sqr(const float* v1, const float* v2) { return rcVdistSqr(v1, v2); }
+void shim_vnormalize(float* v) { rcVnormalize(v); }
+
+// A compact span's connections after rcSetCon, as its 24 bits.
+unsigned int shim_set_con(unsigned int con, int dir, int neighbor) {
+    rcCompactSpan span;
+    memset(&span, 0, sizeof(span));
+    span.con = con;
+    rcSetCon(span, dir, neighbor);
+    return span.con;
+}
+
+int shim_get_con(unsigned int con, int dir) {
+    rcCompactSpan span;
+    memset(&span, 0, sizeof(span));
+    span.con = con;
+    return rcGetCon(span, dir);
+}
+
+int shim_dir_offset_x(int dir) { return rcGetDirOffsetX(dir); }
+int shim_dir_offset_y(int dir) { return rcGetDirOffsetY(dir); }
+int shim_dir_for_offset(int x, int z) { return rcGetDirForOffset(x, z); }
+
+// The most walkable spans in one row of the field inside its border: the
+// most sweeps a row of the monotone partitions and the layers can start.
+// The most sweeps one row of `chf` inside `border` starts. A walkable span
+// starts one unless its -x neighbour inside the border continues it: any
+// walkable neighbour for the layers, one of the same area for the region
+// partitions (`same_area`).
+int shim_chf_most_row_sweeps(void* chf_ptr, int border, int same_area) {
+    const rcCompactHeightfield& chf = *(rcCompactHeightfield*)chf_ptr;
+    const int w = chf.width;
+    int most = 0;
+    for (int y = border; y < chf.height - border; ++y) {
+        int n = 0;
+        for (int x = border; x < w - border; ++x) {
+            const rcCompactCell& c = chf.cells[x + y * w];
+            for (int i = (int)c.index, ni = (int)(c.index + c.count); i < ni; ++i) {
+                if (chf.areas[i] == RC_NULL_AREA) continue;
+                const rcCompactSpan& s = chf.spans[i];
+                bool continued = false;
+                if (x - 1 >= border && rcGetCon(s, 0) != RC_NOT_CONNECTED) {
+                    const int ai = (int)chf.cells[x - 1 + y * w].index + rcGetCon(s, 0);
+                    continued = same_area ? chf.areas[ai] == chf.areas[i]
+                                          : chf.areas[ai] != RC_NULL_AREA;
+                }
+                if (!continued) n++;
+            }
+        }
+        if (n > most) most = n;
+    }
+    return most;
+}
+
 } // extern "C"

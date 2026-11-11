@@ -54,7 +54,7 @@ pub fn loadObj(gpa: Allocator, text: []const u8) !Mesh {
             var n: usize = 0;
             var fields = std.mem.tokenizeAny(u8, row[1..], " \t");
             while (fields.next()) |field| {
-                const end = std.mem.indexOfScalar(u8, field, '/') orelse field.len;
+                const end = std.mem.findScalar(u8, field, '/') orelse field.len;
                 const index = atoi(field[0..end]);
                 face[n] = if (index < 0) index + vert_count else index - 1;
                 n += 1;
@@ -111,24 +111,24 @@ fn atoi(text: []const u8) i32 {
 }
 
 /// A builder of meshes from quads and boxes.
-const Builder = struct {
+pub const Builder = struct {
     gpa: Allocator,
     verts: std.ArrayList(f32) = .empty,
     tris: std.ArrayList(i32) = .empty,
 
-    fn vertex(b: *Builder, x: f32, y: f32, z: f32) !i32 {
+    pub fn vertex(b: *Builder, x: f32, y: f32, z: f32) !i32 {
         const index: i32 = @intCast(b.verts.items.len / 3);
         try b.verts.appendSlice(b.gpa, &.{ x, y, z });
         return index;
     }
 
-    fn tri(b: *Builder, v0: i32, v1: i32, v2: i32) !void {
+    pub fn tri(b: *Builder, v0: i32, v1: i32, v2: i32) !void {
         try b.tris.appendSlice(b.gpa, &.{ v0, v1, v2 });
     }
 
     /// A quad whose normal points up when its corners go around
     /// (x0, z0), (x0, z1), (x1, z1), (x1, z0), as RecastDemo's meshes wind.
-    fn quad(b: *Builder, c: [4][3]f32) !void {
+    pub fn quad(b: *Builder, c: [4][3]f32) !void {
         var v: [4]i32 = undefined;
         for (&v, c) |*index, p| index.* = try b.vertex(p[0], p[1], p[2]);
         try b.tri(v[0], v[1], v[3]);
@@ -136,7 +136,7 @@ const Builder = struct {
     }
 
     /// A closed axis-aligned box, its top walkable.
-    fn box(b: *Builder, min: [3]f32, max: [3]f32) !void {
+    pub fn box(b: *Builder, min: [3]f32, max: [3]f32) !void {
         const x0 = min[0];
         const y0 = min[1];
         const z0 = min[2];
@@ -151,13 +151,13 @@ const Builder = struct {
         try b.quad(.{ .{ x1, y0, z0 }, .{ x1, y1, z0 }, .{ x1, y1, z1 }, .{ x1, y0, z1 } });
     }
 
-    fn finish(b: *Builder) !Mesh {
+    pub fn finish(b: *Builder) !Mesh {
         const verts = try b.verts.toOwnedSlice(b.gpa);
         errdefer b.gpa.free(verts);
         return .{ .verts = verts, .tris = try b.tris.toOwnedSlice(b.gpa) };
     }
 
-    fn deinit(b: *Builder) void {
+    pub fn deinit(b: *Builder) void {
         b.verts.deinit(b.gpa);
         b.tris.deinit(b.gpa);
     }

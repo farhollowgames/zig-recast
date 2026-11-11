@@ -583,10 +583,10 @@ fn mergeRegions(gpa: Allocator, rega: *Region, regb: *Region) Allocator.Error!bo
     const bcon = &regb.connections;
 
     // Find insertion point on A.
-    const insa = std.mem.indexOfScalar(i32, acon, bid) orelse return false;
+    const insa = std.mem.findScalar(i32, acon, bid) orelse return false;
 
     // Find insertion point on B.
-    const insb = std.mem.indexOfScalar(i32, bcon.items, aid) orelse return false;
+    const insb = std.mem.findScalar(i32, bcon.items, aid) orelse return false;
 
     // Merge neighbours.
     rega.connections.clearRetainingCapacity();
@@ -1063,7 +1063,7 @@ fn mergeAndFilterLayerRegions(
                 // Skip if different area type, do not connect regions with different area type.
                 if (reg.area_type != regn.area_type) continue;
                 // Skip if the neighbour is overlapping root region.
-                const overlap = std.mem.indexOfScalar(i32, root.floors.items, nei) != null;
+                const overlap = std.mem.findScalar(i32, root.floors.items, nei) != null;
                 if (overlap) continue;
 
                 // Deepen

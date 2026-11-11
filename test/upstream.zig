@@ -213,6 +213,39 @@ pub extern fn shim_detail_merge(
 ) ?*PolyMeshDetail;
 pub extern fn shim_detail_free(dmesh: *PolyMeshDetail) void;
 
+pub extern fn shim_min(a: f32, b: f32) f32;
+pub extern fn shim_max(a: f32, b: f32) f32;
+pub extern fn shim_clamp(v: f32, min: f32, max: f32) f32;
+pub extern fn shim_clamp_int(v: c_int, min: c_int, max: c_int) c_int;
+/// C's `(int)x`.
+pub extern fn shim_float_to_int(x: f32) c_int;
+pub extern fn shim_sqrt(x: f32) f32;
+pub extern fn shim_vcross(dest: *[3]f32, v1: *const [3]f32, v2: *const [3]f32) void;
+pub extern fn shim_vdot(v1: *const [3]f32, v2: *const [3]f32) f32;
+pub extern fn shim_vmad(dest: *[3]f32, v1: *const [3]f32, v2: *const [3]f32, s: f32) void;
+pub extern fn shim_vadd(dest: *[3]f32, v1: *const [3]f32, v2: *const [3]f32) void;
+pub extern fn shim_vsub(dest: *[3]f32, v1: *const [3]f32, v2: *const [3]f32) void;
+pub extern fn shim_vmin(mn: *[3]f32, v: *const [3]f32) void;
+pub extern fn shim_vmax(mx: *[3]f32, v: *const [3]f32) void;
+pub extern fn shim_vcopy(dest: *[3]f32, v: *const [3]f32) void;
+pub extern fn shim_vdist(v1: *const [3]f32, v2: *const [3]f32) f32;
+pub extern fn shim_vdist_sqr(v1: *const [3]f32, v2: *const [3]f32) f32;
+pub extern fn shim_vnormalize(v: *[3]f32) void;
+/// A compact span's 24 bits of connections after `rcSetCon`.
+pub extern fn shim_set_con(con: c_uint, dir: c_int, neighbor: c_int) c_uint;
+pub extern fn shim_get_con(con: c_uint, dir: c_int) c_int;
+pub extern fn shim_dir_offset_x(dir: c_int) c_int;
+pub extern fn shim_dir_offset_y(dir: c_int) c_int;
+pub extern fn shim_dir_for_offset(x: c_int, z: c_int) c_int;
+
+/// The most sweeps a row inside the border starts, for the region
+/// partitions (`same_area`) or the layers.
+pub extern fn shim_chf_most_row_sweeps(
+    chf: *CompactHeightfield,
+    border: c_int,
+    same_area: c_int,
+) c_int;
+
 pub extern fn shim_dump_hf(hf: *Heightfield, write: Write, user: ?*anyopaque) void;
 pub extern fn shim_dump_chf(chf: *CompactHeightfield, write: Write, user: ?*anyopaque) void;
 pub extern fn shim_dump_layers(lset: *LayerSet, write: Write, user: ?*anyopaque) void;

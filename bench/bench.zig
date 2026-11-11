@@ -1050,7 +1050,7 @@ pub fn main(init: std.process.Init) !void {
     const original_runs = try arena.alloc(Times, runs);
     const port_runs = try arena.alloc(Times, runs);
     for (inputs.items) |*input| {
-        if (std.mem.indexOf(u8, input.name, only) == null) continue;
+        if (std.mem.find(u8, input.name, only) == null) continue;
         const original_built = try arena.alloc(OriginalMeshes, input.tiles.len);
         const port_built = try arena.alloc(PortMeshes, input.tiles.len);
         for (0..warmups + runs) |run| {
