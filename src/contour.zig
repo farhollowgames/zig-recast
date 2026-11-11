@@ -381,9 +381,13 @@ fn simplifyContour(
             }
 
             if (tess) {
-                const dx = bx - ax;
-                const dz = bz - az;
-                if (dx * dx + dz * dz > max_edge_len * max_edge_len) {
+                // In 64 bits: past 46340 the original's int squares
+                // overflow, which C leaves undefined. Built at -O3, it
+                // compares the wrapped squares as unsigned, which gives
+                // this up to 65535.
+                const dx: i64 = bx - ax;
+                const dz: i64 = bz - az;
+                if (dx * dx + dz * dz > @as(i64, max_edge_len) * max_edge_len) {
                     // Round based on the segments in lexilogical order so that the
                     // max tesselation is consistent regardless in which direction
                     // segments are traversed.
@@ -707,7 +711,9 @@ fn mergeRegionHoles(
                 if (inCone(j, outline.nverts, outline.verts, corner)) {
                     const dx = outline.verts[@intCast(j * 4 + 0)] - corner[0];
                     const dz = outline.verts[@intCast(j * 4 + 2)] - corner[2];
-                    diags[ndiags] = .{ .vert = j, .dist = dx * dx + dz * dz };
+                    // Wrapping, as C's int arithmetic does on the targets,
+                    // for fields past 46340 cells.
+                    diags[ndiags] = .{ .vert = j, .dist = dx *% dx +% dz *% dz };
                     ndiags += 1;
                 }
             }

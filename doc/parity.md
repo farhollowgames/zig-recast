@@ -149,6 +149,12 @@ upstream's own tests; `STATUS.md` lists the tests of every feature.
   samples.
 - **Float to int.** C's `(int)` of a float out of range is undefined; the
   port gives what x86-64 gives (the most negative int), on every machine.
+- **Edge lengths past 46340.** `rcBuildContours` squares `maxEdgeLen` in an
+  int, which overflows past 46340, and C leaves that undefined. Built at
+  -O3, the original compares the wrapped squares as unsigned: the exact
+  comparison up to 65535, and from 65536 an arbitrary bound (1 at the
+  largest int). The port squares in 64 bits, so it matches up to 65535,
+  and from 65536 no edge is long enough to split.
 - **Sorting.** Contour holes and diagonals are sorted with a stable sort.
   glibc's `qsort` is stable too, so the original matches on Linux; the
   tests give the original a stable `qsort` on every platform.

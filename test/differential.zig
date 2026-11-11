@@ -756,7 +756,8 @@ test "contours and polygons match for every contour flag and vertex limit" {
     for (0..4) |bits| {
         const flags: recast.ContourBuildFlags = @bitCast(@as(u32, @intCast(bits)));
         for ([_]f32{ 0, 0.7, 1.3, 4 }) |max_error| {
-            for ([_]i32{ 0, 5, 40 }) |max_edge_len| {
+            // The last two square past an int.
+            for ([_]i32{ 0, 5, 40, 50_000, 65_535 }) |max_edge_len| {
                 var cset = try recast.buildContours(ctx, gpa, chf, max_error, max_edge_len, flags);
                 defer cset.deinit(gpa);
                 const original_cset = upstream.shim_contours_build(
@@ -782,6 +783,19 @@ test "contours and polygons match for every contour flag and vertex limit" {
                     try expectSameDump("polymesh", &pmesh, original_pmesh);
                 }
             }
+        }
+        // From 65536, where the original's wrapped square is no bound, no
+        // edge is long enough to split.
+        var unsplit = try recast.buildContours(.none, gpa, chf, 1.3, 0, flags);
+        defer unsplit.deinit(gpa);
+        const expected = try dump(gpa, &unsplit);
+        defer gpa.free(expected);
+        for ([_]i32{ 65_536, std.math.maxInt(i32) }) |max_edge_len| {
+            var cset = try recast.buildContours(.none, gpa, chf, 1.3, max_edge_len, flags);
+            defer cset.deinit(gpa);
+            const actual = try dump(gpa, &cset);
+            defer gpa.free(actual);
+            try testing.expectEqualSlices(u8, expected, actual);
         }
     }
 }
