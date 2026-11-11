@@ -36,6 +36,26 @@ const LevelStackEntry = struct {
     index: i32,
 };
 
+/// A compact heightfield's columns, spans and areas, held by value: read
+/// through the heightfield's pointer, they would be loaded again after every
+/// store to a span's distance.
+const FieldView = struct {
+    cells: []const recast.CompactCell,
+    spans: []const recast.CompactSpan,
+    areas: []const u8,
+    width: i32,
+
+    fn of(chf: *const CompactHeightfield) FieldView {
+        return .{ .cells = chf.cells, .spans = chf.spans, .areas = chf.areas, .width = chf.width };
+    }
+
+    /// The index of span `con` of column (x, y).
+    fn at(f: FieldView, x: i32, y: i32, con: i32) usize {
+        const first: usize = f.cells[@intCast(x + y * f.width)].index;
+        return first + @as(usize, @intCast(con));
+    }
+};
+
 /// The index of span `con` of column (x, y): how a connection names a
 /// neighbour.
 fn spanIndexAt(chf: *const CompactHeightfield, x: i32, y: i32, con: i32) usize {
@@ -46,6 +66,7 @@ fn spanIndexAt(chf: *const CompactHeightfield, x: i32, y: i32, con: i32) usize {
 /// Each span's distance to the nearest border or area change into `src`, 2
 /// per step along an axis and 3 per diagonal step; returns the largest.
 fn calculateDistanceField(chf: *const CompactHeightfield, src: []u16) u16 {
+    const f: FieldView = .of(chf);
     const w = chf.width;
     const h = chf.height;
 
@@ -57,18 +78,18 @@ fn calculateDistanceField(chf: *const CompactHeightfield, src: []u16) u16 {
     while (y < h) : (y += 1) {
         var x: i32 = 0;
         while (x < w) : (x += 1) {
-            const c = chf.cells[@intCast(x + y * w)];
+            const c = f.cells[@intCast(x + y * w)];
             const first: usize = c.index;
             for (first..first + c.count) |i| {
-                const s = chf.spans[i];
-                const area = chf.areas[i];
+                const s = f.spans[i];
+                const area = f.areas[i];
                 var nc: i32 = 0;
-                for (directions) |dir| {
+                inline for (directions) |dir| {
                     if (getCon(s, dir) != not_connected) {
                         const ax = x + getDirOffsetX(dir);
                         const ay = y + getDirOffsetY(dir);
-                        const ai = spanIndexAt(chf, ax, ay, getCon(s, dir));
-                        if (area == chf.areas[ai]) nc += 1;
+                        const ai = f.at(ax, ay, getCon(s, dir));
+                        if (area == f.areas[ai]) nc += 1;
                     }
                 }
                 if (nc != 4) src[i] = 0;
@@ -81,42 +102,46 @@ fn calculateDistanceField(chf: *const CompactHeightfield, src: []u16) u16 {
     while (y < h) : (y += 1) {
         var x: i32 = 0;
         while (x < w) : (x += 1) {
-            const c = chf.cells[@intCast(x + y * w)];
+            const c = f.cells[@intCast(x + y * w)];
             const first: usize = c.index;
             for (first..first + c.count) |i| {
-                const s = chf.spans[i];
+                const s = f.spans[i];
+                // A neighbour is never the span itself, so its distance
+                // stays in a register until the span is done.
+                var d = src[i];
                 if (getCon(s, 0) != not_connected) {
                     // (-1,0)
                     const ax = x + getDirOffsetX(0);
                     const ay = y + getDirOffsetY(0);
-                    const ai = spanIndexAt(chf, ax, ay, getCon(s, 0));
-                    const a_span = chf.spans[ai];
-                    if (@as(i32, src[ai]) + 2 < src[i]) src[i] = src[ai] + 2;
+                    const ai = f.at(ax, ay, getCon(s, 0));
+                    const a_span = f.spans[ai];
+                    if (@as(i32, src[ai]) + 2 < d) d = src[ai] + 2;
 
                     // (-1,-1)
                     if (getCon(a_span, 3) != not_connected) {
                         const aax = ax + getDirOffsetX(3);
                         const aay = ay + getDirOffsetY(3);
-                        const aai = spanIndexAt(chf, aax, aay, getCon(a_span, 3));
-                        if (@as(i32, src[aai]) + 3 < src[i]) src[i] = src[aai] + 3;
+                        const aai = f.at(aax, aay, getCon(a_span, 3));
+                        if (@as(i32, src[aai]) + 3 < d) d = src[aai] + 3;
                     }
                 }
                 if (getCon(s, 3) != not_connected) {
                     // (0,-1)
                     const ax = x + getDirOffsetX(3);
                     const ay = y + getDirOffsetY(3);
-                    const ai = spanIndexAt(chf, ax, ay, getCon(s, 3));
-                    const a_span = chf.spans[ai];
-                    if (@as(i32, src[ai]) + 2 < src[i]) src[i] = src[ai] + 2;
+                    const ai = f.at(ax, ay, getCon(s, 3));
+                    const a_span = f.spans[ai];
+                    if (@as(i32, src[ai]) + 2 < d) d = src[ai] + 2;
 
                     // (1,-1)
                     if (getCon(a_span, 2) != not_connected) {
                         const aax = ax + getDirOffsetX(2);
                         const aay = ay + getDirOffsetY(2);
-                        const aai = spanIndexAt(chf, aax, aay, getCon(a_span, 2));
-                        if (@as(i32, src[aai]) + 3 < src[i]) src[i] = src[aai] + 3;
+                        const aai = f.at(aax, aay, getCon(a_span, 2));
+                        if (@as(i32, src[aai]) + 3 < d) d = src[aai] + 3;
                     }
                 }
+                src[i] = d;
             }
         }
     }
@@ -126,42 +151,44 @@ fn calculateDistanceField(chf: *const CompactHeightfield, src: []u16) u16 {
     while (y >= 0) : (y -= 1) {
         var x: i32 = w - 1;
         while (x >= 0) : (x -= 1) {
-            const c = chf.cells[@intCast(x + y * w)];
+            const c = f.cells[@intCast(x + y * w)];
             const first: usize = c.index;
             for (first..first + c.count) |i| {
-                const s = chf.spans[i];
+                const s = f.spans[i];
+                var d = src[i];
                 if (getCon(s, 2) != not_connected) {
                     // (1,0)
                     const ax = x + getDirOffsetX(2);
                     const ay = y + getDirOffsetY(2);
-                    const ai = spanIndexAt(chf, ax, ay, getCon(s, 2));
-                    const a_span = chf.spans[ai];
-                    if (@as(i32, src[ai]) + 2 < src[i]) src[i] = src[ai] + 2;
+                    const ai = f.at(ax, ay, getCon(s, 2));
+                    const a_span = f.spans[ai];
+                    if (@as(i32, src[ai]) + 2 < d) d = src[ai] + 2;
 
                     // (1,1)
                     if (getCon(a_span, 1) != not_connected) {
                         const aax = ax + getDirOffsetX(1);
                         const aay = ay + getDirOffsetY(1);
-                        const aai = spanIndexAt(chf, aax, aay, getCon(a_span, 1));
-                        if (@as(i32, src[aai]) + 3 < src[i]) src[i] = src[aai] + 3;
+                        const aai = f.at(aax, aay, getCon(a_span, 1));
+                        if (@as(i32, src[aai]) + 3 < d) d = src[aai] + 3;
                     }
                 }
                 if (getCon(s, 1) != not_connected) {
                     // (0,1)
                     const ax = x + getDirOffsetX(1);
                     const ay = y + getDirOffsetY(1);
-                    const ai = spanIndexAt(chf, ax, ay, getCon(s, 1));
-                    const a_span = chf.spans[ai];
-                    if (@as(i32, src[ai]) + 2 < src[i]) src[i] = src[ai] + 2;
+                    const ai = f.at(ax, ay, getCon(s, 1));
+                    const a_span = f.spans[ai];
+                    if (@as(i32, src[ai]) + 2 < d) d = src[ai] + 2;
 
                     // (-1,1)
                     if (getCon(a_span, 0) != not_connected) {
                         const aax = ax + getDirOffsetX(0);
                         const aay = ay + getDirOffsetY(0);
-                        const aai = spanIndexAt(chf, aax, aay, getCon(a_span, 0));
-                        if (@as(i32, src[aai]) + 3 < src[i]) src[i] = src[aai] + 3;
+                        const aai = f.at(aax, aay, getCon(a_span, 0));
+                        if (@as(i32, src[aai]) + 3 < d) d = src[aai] + 3;
                     }
                 }
+                src[i] = d;
             }
         }
     }
@@ -175,6 +202,7 @@ fn calculateDistanceField(chf: *const CompactHeightfield, src: []u16) u16 {
 /// gets the rounded mean of itself and its 8 neighbours, a missing neighbour
 /// counting as the span itself.
 fn boxBlur(chf: *const CompactHeightfield, thr: i32, src: []const u16, dst: []u16) void {
+    const f: FieldView = .of(chf);
     const w = chf.width;
     const h = chf.height;
     const threshold = thr * 2;
@@ -183,10 +211,10 @@ fn boxBlur(chf: *const CompactHeightfield, thr: i32, src: []const u16, dst: []u1
     while (y < h) : (y += 1) {
         var x: i32 = 0;
         while (x < w) : (x += 1) {
-            const c = chf.cells[@intCast(x + y * w)];
+            const c = f.cells[@intCast(x + y * w)];
             const first: usize = c.index;
             for (first..first + c.count) |i| {
-                const s = chf.spans[i];
+                const s = f.spans[i];
                 const cd = src[i];
                 if (cd <= threshold) {
                     dst[i] = cd;
@@ -194,19 +222,19 @@ fn boxBlur(chf: *const CompactHeightfield, thr: i32, src: []const u16, dst: []u1
                 }
 
                 var d: i32 = cd;
-                for (directions) |dir| {
+                inline for (directions) |dir| {
                     if (getCon(s, dir) != not_connected) {
                         const ax = x + getDirOffsetX(dir);
                         const ay = y + getDirOffsetY(dir);
-                        const ai = spanIndexAt(chf, ax, ay, getCon(s, dir));
+                        const ai = f.at(ax, ay, getCon(s, dir));
                         d += src[ai];
 
-                        const a_span = chf.spans[ai];
+                        const a_span = f.spans[ai];
                         const dir2 = dir +% 1;
                         if (getCon(a_span, dir2) != not_connected) {
                             const ax2 = ax + getDirOffsetX(dir2);
                             const ay2 = ay + getDirOffsetY(dir2);
-                            const ai2 = spanIndexAt(chf, ax2, ay2, getCon(a_span, dir2));
+                            const ai2 = f.at(ax2, ay2, getCon(a_span, dir2));
                             d += src[ai2];
                         } else {
                             d += cd;
