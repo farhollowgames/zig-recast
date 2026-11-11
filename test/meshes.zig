@@ -1,6 +1,7 @@
 //! Inputs for the differential tests and the benchmark: RecastDemo's OBJ
-//! meshes, read as RecastDemo reads them, and a generated terrain with
-//! slopes, cliffs, holes, pillars, stairs and a bridge over walkable ground.
+//! meshes, read as RecastDemo reads them, a generated terrain with slopes,
+//! cliffs, holes, pillars, stairs and a bridge over walkable ground, and
+//! rolling ground as Loomwork's terrain makes it.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -186,6 +187,76 @@ fn terrainHeight(x: i32, z: i32, size: i32, seed: u32) f32 {
     const bowl: f32 = @floatFromInt(@divTrunc(size, 8));
     if (r2 < bowl * bowl) y -= (bowl * bowl - r2) * 0.05;
     return y;
+}
+
+/// Rolling ground of `size` by `size` unit quads, as Loomwork's terrain
+/// generates it: three octaves of integer value noise, 32 m hills of 4 m,
+/// 12 m bumps of 1.2 m and 5 m ripples of 0.3 m, in steps of 8 mm.
+pub fn vale(gpa: Allocator, size: i32) !Mesh {
+    var b: Builder = .{ .gpa = gpa };
+    errdefer b.deinit();
+
+    const row: usize = @intCast(size + 1);
+    const grid = try gpa.alloc(i32, row * row);
+    defer gpa.free(grid);
+    const base_mm = -10_000;
+    const step_mm = 8;
+    var z: i32 = 0;
+    while (z <= size) : (z += 1) {
+        var x: i32 = 0;
+        while (x <= size) : (x += 1) {
+            var mm: i64 = 0;
+            mm += valeNoise(x, z, 32, 4_000, 1);
+            mm += valeNoise(x, z, 12, 1_200, 2);
+            mm += valeNoise(x, z, 5, 300, 3);
+            const raw = @divFloor(mm - base_mm, step_mm);
+            const y: f32 = @floatFromInt(base_mm + raw * step_mm);
+            grid[@as(usize, @intCast(z)) * row + @as(usize, @intCast(x))] =
+                try b.vertex(@floatFromInt(x), y / 1000.0, @floatFromInt(z));
+        }
+    }
+    z = 0;
+    while (z < size) : (z += 1) {
+        var x: i32 = 0;
+        while (x < size) : (x += 1) {
+            const ux: usize = @intCast(x);
+            const uz: usize = @intCast(z);
+            const v00 = grid[uz * row + ux];
+            const v10 = grid[uz * row + ux + 1];
+            const v01 = grid[(uz + 1) * row + ux];
+            const v11 = grid[(uz + 1) * row + ux + 1];
+            try b.tri(v00, v01, v10);
+            try b.tri(v10, v01, v11);
+        }
+    }
+    return b.finish();
+}
+
+/// Value noise: hashed heights on a `spacing` lattice in [-amplitude,
+/// amplitude], blended by an integer smoothstep.
+fn valeNoise(gx: i32, gz: i32, spacing: i32, amplitude: i64, seed: u64) i64 {
+    const lx = @divFloor(gx, spacing);
+    const lz = @divFloor(gz, spacing);
+    const one: i64 = 1 << 12;
+    const tx = smoothstep(@divFloor(@as(i64, gx - lx * spacing) * one, spacing), one);
+    const tz = smoothstep(@divFloor(@as(i64, gz - lz * spacing) * one, spacing), one);
+    const a = lattice(lx, lz, amplitude, seed);
+    const b = lattice(lx + 1, lz, amplitude, seed);
+    const c = lattice(lx, lz + 1, amplitude, seed);
+    const d = lattice(lx + 1, lz + 1, amplitude, seed);
+    const top = a * one + (b - a) * tx;
+    const bottom = c * one + (d - c) * tx;
+    return @divFloor(top * one + (bottom - top) * tz, one * one);
+}
+
+fn smoothstep(t: i64, one: i64) i64 {
+    return @divFloor(t * t * (3 * one - 2 * t), one * one);
+}
+
+fn lattice(x: i32, z: i32, amplitude: i64, seed: u64) i64 {
+    const key = [2]i32{ x, z };
+    const h = std.hash.Wyhash.hash(seed, std.mem.asBytes(&key));
+    return @as(i64, @intCast(h % @as(u64, @intCast(2 * amplitude + 1)))) - amplitude;
 }
 
 /// A heightmap of `size` by `size` unit quads with holes, then pillars,

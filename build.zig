@@ -100,9 +100,11 @@ const upstream_sources = [_][]const u8{
     "RecastRegion.cpp",
 };
 
-/// The flags Loomwork builds the original with, and fused multiply-adds
-/// off so float steps round as written, as Zig's do.
+/// The flags Loomwork builds the original with, -O3 (Zig's ReleaseFast
+/// gives C++ -O2), and fused multiply-adds off so float steps round as
+/// written, as Zig's do.
 const cpp_flags = [_][]const u8{
+    "-O3",
     "-std=c++11",
     "-fno-exceptions",
     "-fno-rtti",
