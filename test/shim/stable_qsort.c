@@ -1,12 +1,14 @@
 // A stable qsort for the upstream build in the tests. Recast sorts contour
 // holes and diagonals with qsort, and equal keys are common; glibc's qsort is
 // a stable merge sort, others are not. This one makes the oracle's order the
-// same on every platform, and the port sorts stably to match.
+// same on every platform, and the port sorts stably to match. It is hidden,
+// so the oracle's own calls bind to it when the oracle is a shared library.
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
-void qsort(void* base, size_t n, size_t size, int (*cmp)(const void*, const void*)) {
+__attribute__((visibility("hidden"))) void qsort(void* base, size_t n, size_t size,
+                                                 int (*cmp)(const void*, const void*)) {
     if (n < 2) return;
     unsigned char* items = (unsigned char*)base;
     unsigned char* tmp = (unsigned char*)malloc(size);

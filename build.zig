@@ -115,22 +115,28 @@ const cpp_flags = [_][]const u8{
 };
 
 /// The original Recast with the tests' C interface. `oracle` adds the
-/// stable qsort the tests compare against.
+/// stable qsort the tests compare against and, on glibc, builds a shared
+/// library without compiler_rt, so that its `cosf` binds to the system's,
+/// as in an original built on Linux: linked into a binary Zig links, it
+/// binds to compiler_rt's, which rounds differently. The benchmark links it
+/// statically.
 fn upstreamLibrary(
     b: *std.Build,
     upstream: *std.Build.Dependency,
     target: std.Build.ResolvedTarget,
     oracle: bool,
 ) *std.Build.Step.Compile {
+    const shared = oracle and target.result.isGnuLibC();
     const lib = b.addLibrary(.{
         .name = if (oracle) "recast_oracle" else "recast_upstream",
-        .linkage = .static,
+        .linkage = if (shared) .dynamic else .static,
         .root_module = b.createModule(.{
             .target = target,
             .optimize = .fast,
             .link_libc = true,
         }),
     });
+    if (shared) lib.bundle_compiler_rt = false;
     lib.root_module.addIncludePath(upstream.path("Recast/Include"));
     lib.root_module.addCSourceFiles(.{
         .root = upstream.path("Recast/Source"),

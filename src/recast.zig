@@ -75,6 +75,10 @@ pub const mergePolyMeshDetails = mesh_detail.mergePolyMeshDetails;
 
 pub const buildHeightfieldLayers = layers.buildHeightfieldLayers;
 
+/// The cosine `markWalkableTriangles` and `clearUnwalkableTriangles` take
+/// their thresholds from: glibc's `cosf`, the same float on every target.
+pub const cosf = @import("cosf.zig").cosf;
+
 /// Recast's value of pi, used for slope angles.
 pub const pi: f32 = 3.14159265;
 
@@ -635,7 +639,7 @@ pub fn markWalkableTriangles(
 ) void {
     _ = ctx;
     assert(tris.len == tri_area_ids.len * 3);
-    const walkable_thr = @cos(walkable_slope_angle / 180.0 * pi);
+    const walkable_thr = cosf(walkable_slope_angle / 180.0 * pi);
     for (tri_area_ids, 0..) |*id, i| {
         const normal = triangleNormal(verts, tris[i * 3 ..][0..3]);
         if (normal[1] > walkable_thr) id.* = walkable_area;
@@ -653,7 +657,7 @@ pub fn clearUnwalkableTriangles(
 ) void {
     _ = ctx;
     assert(tris.len == tri_area_ids.len * 3);
-    const walkable_limit_y = @cos(walkable_slope_angle / 180.0 * pi);
+    const walkable_limit_y = cosf(walkable_slope_angle / 180.0 * pi);
     for (tri_area_ids, 0..) |*id, i| {
         const normal = triangleNormal(verts, tris[i * 3 ..][0..3]);
         if (normal[1] <= walkable_limit_y) id.* = null_area;
@@ -830,6 +834,7 @@ pub fn buildCompactHeightfield(
 const testing = std.testing;
 
 test {
+    _ = @import("cosf.zig");
     _ = context;
     _ = rasterization;
     _ = filter;

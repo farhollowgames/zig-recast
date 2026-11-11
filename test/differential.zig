@@ -7,6 +7,7 @@
 // --------------------------------------------------------
 
 const std = @import("std");
+const builtin = @import("builtin");
 const recast = @import("recast");
 const upstream = @import("upstream.zig");
 const meshes = @import("meshes.zig");
@@ -1040,20 +1041,79 @@ test "walkable triangles match at every slope" {
     }
 }
 
-test "slope thresholds are cosines correctly rounded, as the original's linked cosf gives" {
-    // The original here links the port's cosf, Zig's compiler_rt, which
-    // gives the cosine correctly rounded on every tenth of a degree up to
-    // 180. glibc's cosf does not on 25 of them, 49 degrees among them.
-    for (0..1801) |tenths| {
-        const slope = @as(f32, @floatFromInt(tenths)) / 10;
-        const x = slope / 180.0 * recast.pi;
-        const rounded: f32 = @floatCast(@cos(@as(f64, x)));
-        try testing.expectEqual(@as(u32, @bitCast(rounded)), @as(u32, @bitCast(@cos(x))));
-        try testing.expectEqual(
-            @as(u32, @bitCast(upstream.shim_cosf(x))),
-            @as(u32, @bitCast(@cos(x))),
-        );
+test "a normal between glibc's cosine and the correctly rounded one marks as the original" {
+    // The original calls its C library's cosf, glibc's on Linux, which at 49
+    // degrees is a float step from the correctly rounded cosine. A triangle
+    // whose normal's y is the higher of the two is walkable under the lower
+    // threshold only.
+    if (!builtin.target.isGnuLibC()) return error.SkipZigTest;
+    const slope: f32 = 49;
+    const x = slope / 180.0 * recast.pi;
+    const glibc = upstream.shim_cosf(x);
+    const rounded: f32 = @floatCast(@cos(@as(f64, x)));
+    try testing.expect(glibc != rounded);
+    const verts = try triangleWithNormalY(@max(glibc, rounded));
+    const tris = [_]i32{ 0, 1, 2 };
+    var logs = try Logs.init();
+    defer logs.deinit();
+
+    var areas = [1]u8{0};
+    var original_areas = [1]u8{0};
+    recast.markWalkableTriangles(logs.port(), slope, &verts, &tris, &areas);
+    upstream.shim_mark_walkable(logs.original, slope, &verts, 3, &tris, 1, &original_areas);
+    try testing.expectEqual(original_areas[0], areas[0]);
+    try testing.expectEqual(glibc < rounded, areas[0] == recast.walkable_area);
+
+    areas[0] = recast.walkable_area;
+    original_areas[0] = recast.walkable_area;
+    recast.clearUnwalkableTriangles(logs.port(), slope, &verts, &tris, &areas);
+    upstream.shim_clear_unwalkable(logs.original, slope, &verts, 3, &tris, 1, &original_areas);
+    try testing.expectEqual(original_areas[0], areas[0]);
+    try testing.expectEqual(glibc > rounded, areas[0] == recast.null_area);
+    try logs.expectSame("slope threshold");
+}
+
+test "the slope's cosine is glibc's cosf on every float from 2^-12 to pi, and on a sweep of all" {
+    // Below 2^-12 both give 1. The sweep reaches the large reduction,
+    // negative angles, infinities and NaNs.
+    if (!builtin.target.isGnuLibC()) return error.SkipZigTest;
+    var bits: u32 = @bitCast(@as(f32, 0x1p-12));
+    while (bits <= @as(u32, @bitCast(recast.pi))) : (bits += 1) try expectGlibcCosine(bits);
+    var sweep: u64 = 0;
+    while (sweep <= std.math.maxInt(u32)) : (sweep += 4099) try expectGlibcCosine(@intCast(sweep));
+}
+
+/// Checks the port's cosine of the float of `bits` against glibc's, which
+/// the original calls; NaNs compare as any NaN.
+fn expectGlibcCosine(bits: u32) !void {
+    const x: f32 = @bitCast(bits);
+    const want = upstream.shim_cosf(x);
+    const got = recast.cosf(x);
+    if (std.math.isNan(want) and std.math.isNan(got)) return;
+    if (@as(u32, @bitCast(want)) == @as(u32, @bitCast(got))) return;
+    std.debug.print("cosf(0x{x:0>8}): glibc 0x{x:0>8}, port 0x{x:0>8}\n", .{
+        bits,
+        @as(u32, @bitCast(want)),
+        @as(u32, @bitCast(got)),
+    });
+    return error.TestExpectedEqual;
+}
+
+/// A triangle rising over one unit of z whose normal's y is `y` as the
+/// slope functions compute it, found by stepping the rise a float at a time.
+fn triangleWithNormalY(y: f32) ![9]f32 {
+    const rise: f32 = @floatCast(@sqrt(1 / (@as(f64, y) * y) - 1));
+    const first = @as(u32, @bitCast(rise)) - 256;
+    for (0..512) |step| {
+        const h: f32 = @bitCast(first + @as(u32, @intCast(step)));
+        const verts = [9]f32{ 0, 0, 0, 0, h, 1, 1, 0, 0 };
+        const e0 = recast.vsub(verts[3..6], verts[0..3]);
+        const e1 = recast.vsub(verts[6..9], verts[0..3]);
+        var normal = recast.vcross(&e0, &e1);
+        recast.vnormalize(&normal);
+        if (normal[1] == y) return verts;
     }
+    return error.TestUnexpectedResult;
 }
 
 test "every rasterization entry point matches on crafted triangles" {
