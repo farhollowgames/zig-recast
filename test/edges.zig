@@ -141,6 +141,41 @@ test "borders of half the field and wider build as the original" {
     }
 }
 
+test "tiles off the cell grid and of other cell sizes merge as the original" {
+    // A floor under four tiles: the first sets the merge's grid, the second
+    // starts off that grid, and the last two have other cell sizes, which
+    // the merge reads on the first tile's grid.
+    const verts = [_]f32{ 0, 1, 0, 0, 1, 12, 12, 1, 12, 12, 1, 0 };
+    const tris = [_]i32{ 0, 1, 2, 0, 2, 3 };
+    const areas = [_]u8{ 0, 0 };
+    const tiles = [_]recast.Config{
+        squareTile(-0.3, -0.3, 6.5, 0.5),
+        squareTile(5.83, -0.3, 6.5, 0.5),
+        squareTile(0.1, 6.0, 6, 0.3),
+        squareTile(6.05, 6.11, 6, 0.4),
+    };
+    const case: pipeline.Case = .{
+        .verts = &verts,
+        .tris = &tris,
+        .areas = &areas,
+        .tiles = &tiles,
+    };
+    for (try expectSameEveryPartition(case, "tiles off the grid")) |summary| {
+        try testing.expectEqual(null, summary.failedStep());
+    }
+}
+
+/// A tile from (`x`, `z`) at least `size` wide, in cells of size `cs`.
+fn squareTile(x: f32, z: f32, size: f32, cs: f32) recast.Config {
+    const cells: i32 = @intFromFloat(@ceil(size / cs));
+    const extent = @as(f32, @floatFromInt(cells)) * cs;
+    var cfg = tile(cells, cells, 4);
+    cfg.cs = cs;
+    cfg.bmin = .{ x, 0, z };
+    cfg.bmax = .{ x + extent, 4, z + extent };
+    return cfg;
+}
+
 test "one span builds as the original" {
     const spans = [_]pipeline.ExtraSpan{walkableSpan(0, 0, 0, 2)};
     for ([_]i32{ 1, 3 }) |size| {
