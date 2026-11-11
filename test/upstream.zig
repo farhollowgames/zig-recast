@@ -235,6 +235,8 @@ pub extern fn shim_polymesh_build(log: *Log, cset: *ContourSet, nvp: c_int) ?*Po
 pub extern fn shim_polymesh_merge(log: *Log, meshes: [*]const *PolyMesh, n: c_int) ?*PolyMesh;
 pub extern fn shim_polymesh_copy(log: *Log, src: *PolyMesh) ?*PolyMesh;
 pub extern fn shim_polymesh_free(pmesh: *PolyMesh) void;
+pub extern fn shim_polymesh_count(pmesh: *PolyMesh) c_int;
+pub extern fn shim_polymesh_set_flags(pmesh: *PolyMesh, flags: [*]const u16) void;
 pub extern fn shim_detail_build(
     log: *Log,
     pmesh: *PolyMesh,

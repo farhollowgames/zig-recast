@@ -418,6 +418,10 @@ fn expectSamePipeline(mesh: *const meshes.Mesh, s: Settings) !void {
     try expectSameDump("polymesh", &pmesh, original_pmesh.?);
 
     {
+        // Flags in every bit, for the copy to carry.
+        const poly_flags = pmesh.flags[0..@intCast(pmesh.npolys)];
+        for (poly_flags, 0..) |*f, i| f.* = @truncate((i *% 0x9e37) ^ 0x8001);
+        upstream.shim_polymesh_set_flags(original_pmesh.?, poly_flags.ptr);
         const original_copy = upstream.shim_polymesh_copy(log, original_pmesh.?);
         defer if (original_copy) |o| upstream.shim_polymesh_free(o);
         var copy = try recast.copyPolyMesh(ctx, gpa, &pmesh);

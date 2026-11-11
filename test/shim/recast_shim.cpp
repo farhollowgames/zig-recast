@@ -467,6 +467,13 @@ void* shim_polymesh_copy(void* ctx, void* src) {
 
 void shim_polymesh_free(void* pmesh) { rcFreePolyMesh((rcPolyMesh*)pmesh); }
 
+int shim_polymesh_count(void* pmesh) { return ((rcPolyMesh*)pmesh)->npolys; }
+
+void shim_polymesh_set_flags(void* pmesh_ptr, const unsigned short* flags) {
+    rcPolyMesh* pmesh = (rcPolyMesh*)pmesh_ptr;
+    for (int i = 0; i < pmesh->npolys; ++i) pmesh->flags[i] = flags[i];
+}
+
 void* shim_detail_build(void* ctx, void* pmesh, void* chf, float sample_dist,
                         float sample_max_error) {
     rcPolyMeshDetail* dmesh = rcAllocPolyMeshDetail();

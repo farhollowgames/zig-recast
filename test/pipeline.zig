@@ -512,6 +512,7 @@ fn portTile(
         try pmeshes.append(gpa, pmesh);
     }
     const kept = &pmeshes.items[pmeshes.items.len - 1];
+    for (kept.flags[0..@intCast(kept.npolys)], 0..) |*f, i| f.* = polyFlags(t, i);
     {
         var copy = try recast.copyPolyMesh(ctx, gpa, kept);
         defer copy.deinit(gpa);
@@ -524,6 +525,13 @@ fn portTile(
     errdefer dmesh.deinit(gpa);
     try run.stepDump("tile {d}: detail", .{t}, true, &dmesh);
     try dmeshes.append(gpa, dmesh);
+}
+
+/// The flags a test gives polygon `i` of tile `t` once its mesh is built,
+/// for the copy and the merge to carry: every bit of them, as a caller's
+/// may.
+fn polyFlags(t: usize, i: usize) u16 {
+    return @truncate((i *% 0x9e37) ^ (t << 11) ^ 0x8001);
 }
 
 // The original's side, step for step as the port's.
@@ -795,6 +803,13 @@ fn originalTile(
         errdefer upstream.shim_polymesh_free(pmesh);
         try run.stepDump("tile {d}: polymesh", .{t}, true, pmesh);
         try pmeshes.append(gpa, pmesh);
+    }
+    {
+        const npolys = upstream.shim_polymesh_count(pmesh);
+        const poly_flags = try gpa.alloc(u16, @intCast(npolys));
+        defer gpa.free(poly_flags);
+        for (poly_flags, 0..) |*f, i| f.* = polyFlags(t, i);
+        upstream.shim_polymesh_set_flags(pmesh, poly_flags.ptr);
     }
     if (upstream.shim_polymesh_copy(log, pmesh)) |copy| {
         defer upstream.shim_polymesh_free(copy);
