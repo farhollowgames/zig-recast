@@ -3,9 +3,11 @@
 //! ReleaseFast and the original -O3, both for the native CPU. The inputs
 //! are each RecastDemo mesh and a large terrain with RecastDemo's
 //! defaults, and that terrain and rolling ground as Loomwork's terrain
-//! makes it, in tiles with Loomwork's navmesh settings. Each figure is the
-//! median of several runs; the two sides take turns, tile by tile. It
-//! prints a Markdown table per feature, as the README shows them.
+//! makes it, in tiles with Loomwork's navmesh settings: 256 m of each, and
+//! the square kilometre of rolling ground a Loomwork world starts with.
+//! Each figure is the median of several runs; the two sides take turns,
+//! tile by tile, and which goes first changes from run to run. It prints a
+//! Markdown table per feature, as the README shows them.
 //!
 //!   zig build bench -- [--runs n] [--warmup n] [--only part of an input's name]
 //!                       [--cpu n]
@@ -425,11 +427,19 @@ const Tile = struct {
     flat_verts: []const f32,
 };
 
-/// The triangles of `mesh` whose footprint touches the build's bounds, as a
-/// caller culls them per tile.
-fn cull(gpa: std.mem.Allocator, mesh: *const meshes.Mesh, cfg: *const recast.Config) ![]i32 {
-    var tris: std.ArrayList(i32) = .empty;
-    errdefer tris.deinit(gpa);
+/// Each tile's triangles: those of `mesh` whose footprint touches the
+/// tile's bounds, in the mesh's order, as a caller culls them per tile.
+/// The tiles are `tiles_x` a row from `bmin`.
+fn cull(
+    gpa: std.mem.Allocator,
+    mesh: *const meshes.Mesh,
+    cfgs: []const recast.Config,
+    tiles_x: usize,
+    bmin: [3]f32,
+) ![][]i32 {
+    const lists = try gpa.alloc(std.ArrayList(i32), cfgs.len);
+    for (lists) |*list| list.* = .empty;
+    const tiles_z = cfgs.len / tiles_x;
     var i: usize = 0;
     while (i < mesh.tris.len) : (i += 3) {
         var lo: [2]f32 = .{ std.math.inf(f32), std.math.inf(f32) };
@@ -439,15 +449,37 @@ fn cull(gpa: std.mem.Allocator, mesh: *const meshes.Mesh, cfg: *const recast.Con
             lo = .{ @min(lo[0], p[0]), @min(lo[1], p[2]) };
             hi = .{ @max(hi[0], p[0]), @max(hi[1], p[2]) };
         }
-        if (hi[0] < cfg.bmin[0] or lo[0] > cfg.bmax[0]) continue;
-        if (hi[1] < cfg.bmin[2] or lo[1] > cfg.bmax[2]) continue;
-        try tris.appendSlice(gpa, mesh.tris[i..][0..3]);
+        // The tiles the footprint can touch, a tile wider each way for the
+        // borders; the test below is the exact one.
+        const first_x = tileIndex(lo[0] - bmin[0], tiles_x, -1);
+        const last_x = tileIndex(hi[0] - bmin[0], tiles_x, 1);
+        const first_z = tileIndex(lo[1] - bmin[2], tiles_z, -1);
+        const last_z = tileIndex(hi[1] - bmin[2], tiles_z, 1);
+        for (first_z..last_z + 1) |tz| for (first_x..last_x + 1) |tx| {
+            const cfg = &cfgs[tz * tiles_x + tx];
+            if (hi[0] < cfg.bmin[0] or lo[0] > cfg.bmax[0]) continue;
+            if (hi[1] < cfg.bmin[2] or lo[1] > cfg.bmax[2]) continue;
+            try lists[tz * tiles_x + tx].appendSlice(gpa, mesh.tris[i..][0..3]);
+        };
     }
-    return tris.toOwnedSlice(gpa);
+    const culled = try gpa.alloc([]i32, cfgs.len);
+    for (culled, lists) |*tris, *list| tris.* = try list.toOwnedSlice(gpa);
+    return culled;
 }
 
-fn tileOf(gpa: std.mem.Allocator, mesh: *const meshes.Mesh, cfg: recast.Config) !Tile {
-    const tris = if (cfg.tile_size == 0) mesh.tris else try cull(gpa, mesh, &cfg);
+/// The tile `offset` from the tiles' corner falls in, moved `step` tiles
+/// and kept to the `count` tiles.
+fn tileIndex(offset: f32, count: usize, step: i32) usize {
+    const index = @as(i64, @intFromFloat(@floor(offset / tile_size))) + step;
+    return @intCast(std.math.clamp(index, 0, @as(i64, @intCast(count)) - 1));
+}
+
+fn tileOf(
+    gpa: std.mem.Allocator,
+    mesh: *const meshes.Mesh,
+    cfg: recast.Config,
+    tris: []const i32,
+) !Tile {
     const tris_u16: ?[]u16 = if (mesh.verts.len / 3 <= 0xffff) blk: {
         const narrow = try gpa.alloc(u16, tris.len);
         for (narrow, tris) |*n, t| n.* = @intCast(t);
@@ -1013,8 +1045,10 @@ fn printTime(ns: u64, about: Info, amount: u64) void {
         std.debug.print(", {d:.2} G/s |", .{rate / 1e9});
     } else if (rate >= 1e6) {
         std.debug.print(", {d:.1} M/s |", .{rate / 1e6});
-    } else {
+    } else if (rate >= 1e4) {
         std.debug.print(", {d:.1} k/s |", .{rate / 1e3});
+    } else {
+        std.debug.print(", {d:.0}/s |", .{rate});
     }
 }
 
@@ -1056,6 +1090,24 @@ const table_head =
     \\
 ;
 
+/// The bench's inputs, in the order of the tables.
+const input_specs = [_]InputSpec{
+    .{ .name = "dungeon.obj", .source = .dungeon },
+    .{ .name = "nav_test.obj", .source = .nav_test },
+    .{ .name = "undulating.obj", .source = .undulating },
+    .{ .name = "terrain 256 m", .source = .terrain },
+    .{ .name = "terrain 256 m, 64 m tiles", .source = .terrain, .tiled = true },
+    .{ .name = "vale 256 m, 64 m tiles", .source = .vale, .tiled = true },
+    .{ .name = "vale 1 km, 64 m tiles", .source = .vale_large, .tiled = true },
+};
+
+const InputSpec = struct {
+    name: []const u8,
+    source: enum { dungeon, nav_test, undulating, terrain, vale, vale_large },
+    /// Built in Loomwork's tiles, or whole with RecastDemo's defaults.
+    tiled: bool = false,
+};
+
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const arena = init.arena.allocator();
@@ -1086,60 +1138,60 @@ pub fn main(init: std.process.Init) !void {
     defer upstream.shim_log_destroy(log);
     upstream.shim_log_enable(log, 0, 0);
 
-    var dungeon = try meshes.loadObj(arena, @embedFile("dungeon"));
-    var nav_test = try meshes.loadObj(arena, @embedFile("nav_test"));
-    var undulating = try meshes.loadObj(arena, @embedFile("undulating"));
-    var terrain = try meshes.terrain(arena, 256, 1);
-    var vale = try meshes.vale(arena, 256);
-
     var inputs: std.ArrayList(Input) = .empty;
-    for ([_]struct { []const u8, *meshes.Mesh }{
-        .{ "dungeon.obj", &dungeon },
-        .{ "nav_test.obj", &nav_test },
-        .{ "undulating.obj", &undulating },
-        .{ "terrain 256 m", &terrain },
-    }) |entry| {
+    for (input_specs) |spec| {
+        if (std.mem.find(u8, spec.name, only) == null) continue;
+        const mesh = try arena.create(meshes.Mesh);
+        mesh.* = switch (spec.source) {
+            .dungeon => try meshes.loadObj(arena, @embedFile("dungeon")),
+            .nav_test => try meshes.loadObj(arena, @embedFile("nav_test")),
+            .undulating => try meshes.loadObj(arena, @embedFile("undulating")),
+            .terrain => try meshes.terrain(arena, 256, 1),
+            .vale => try meshes.vale(arena, 256),
+            .vale_large => try meshes.vale(arena, 1024),
+        };
         var bmin: [3]f32 = undefined;
         var bmax: [3]f32 = undefined;
-        recast.calcBounds(entry[1].verts, &bmin, &bmax);
-        const tiles = try arena.alloc(Tile, 1);
-        tiles[0] = try tileOf(arena, entry[1], soloConfig(bmin, bmax));
-        try inputs.append(arena, .{ .name = entry[0], .mesh = entry[1], .tiles = tiles });
-    }
-    for ([_]struct { []const u8, *meshes.Mesh }{
-        .{ "terrain 256 m, 64 m tiles", &terrain },
-        .{ "vale 256 m, 64 m tiles", &vale },
-    }) |entry| {
-        var bmin: [3]f32 = undefined;
-        var bmax: [3]f32 = undefined;
-        recast.calcBounds(entry[1].verts, &bmin, &bmax);
+        recast.calcBounds(mesh.verts, &bmin, &bmax);
+        if (!spec.tiled) {
+            const tiles = try arena.alloc(Tile, 1);
+            tiles[0] = try tileOf(arena, mesh, soloConfig(bmin, bmax), mesh.tris);
+            try inputs.append(arena, .{ .name = spec.name, .mesh = mesh, .tiles = tiles });
+            continue;
+        }
         const tiles_x: usize = @intFromFloat(@ceil((bmax[0] - bmin[0]) / tile_size));
         const tiles_z: usize = @intFromFloat(@ceil((bmax[2] - bmin[2]) / tile_size));
-        const tiles = try arena.alloc(Tile, tiles_x * tiles_z);
-        for (tiles, 0..) |*tile, t| {
-            const tx: i32 = @intCast(t % tiles_x);
-            const tz: i32 = @intCast(t / tiles_x);
-            tile.* = try tileOf(arena, entry[1], tileConfig(bmin, bmax, tx, tz));
+        const cfgs = try arena.alloc(recast.Config, tiles_x * tiles_z);
+        for (cfgs, 0..) |*cfg, t| {
+            cfg.* = tileConfig(bmin, bmax, @intCast(t % tiles_x), @intCast(t / tiles_x));
         }
-        try inputs.append(arena, .{ .name = entry[0], .mesh = entry[1], .tiles = tiles });
+        const culled = try cull(arena, mesh, cfgs, tiles_x, bmin);
+        const tiles = try arena.alloc(Tile, cfgs.len);
+        for (tiles, cfgs, culled) |*tile, cfg, tris| tile.* = try tileOf(arena, mesh, cfg, tris);
+        try inputs.append(arena, .{ .name = spec.name, .mesh = mesh, .tiles = tiles });
     }
 
     const original_runs = try arena.alloc(Times, runs);
     const port_runs = try arena.alloc(Times, runs);
     for (inputs.items) |*input| {
-        if (std.mem.find(u8, input.name, only) == null) continue;
         const original_built = try arena.alloc(OriginalMeshes, input.tiles.len);
         const port_built = try arena.alloc(PortMeshes, input.tiles.len);
         for (0..warmups + runs) |run| {
             var original: Times = @splat(null);
             var port: Times = @splat(null);
             var work: Work = @splat(0);
+            // Which side goes first changes from run to run, so neither is
+            // always the one that finds the tile's input in the cache.
+            const original_first = run % 2 == 0;
+            const verts = input.mesh.verts;
             for (input.tiles, original_built, port_built) |*tile, *o, *p| {
-                o.* = try buildOriginal(io, log, input.mesh.verts, tile, &original);
-                p.* = try buildPort(io, gpa, input.mesh.verts, tile, &port, &work);
+                if (original_first) o.* = try buildOriginal(io, log, verts, tile, &original);
+                p.* = try buildPort(io, gpa, verts, tile, &port, &work);
+                if (!original_first) o.* = try buildOriginal(io, log, verts, tile, &original);
             }
-            try wholeOriginal(io, log, input.mesh, original_built, &original);
+            if (original_first) try wholeOriginal(io, log, input.mesh, original_built, &original);
             try wholePort(io, gpa, input.mesh, port_built, &port);
+            if (!original_first) try wholeOriginal(io, log, input.mesh, original_built, &original);
             for (original_built, port_built) |o, *p| {
                 upstream.shim_polymesh_free(o.pmesh);
                 upstream.shim_detail_free(o.dmesh);
