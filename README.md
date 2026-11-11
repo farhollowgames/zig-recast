@@ -34,11 +34,10 @@ model) for Farhollow Games, and has not yet been reviewed by a person.
 ## Install
 
 ```sh
-zig fetch --save git+https://github.com/farhollowgames/zig-recast
+zig fetch --save git+https://github.com/farhollowgames/zig-recast#v0.1.0
 ```
 
-No version is tagged yet, so this takes `main`; add `#<tag>` once one is.
-Then, in `build.zig`:
+`v0.1.0` is the latest release. Then, in `build.zig`:
 
 ```zig
 const recast = b.dependency("recast", .{ .target = target, .optimize = optimize });
@@ -133,6 +132,8 @@ in [`src/`](src) describe each one.
 *Additions*
 - `recast.cosf`, the port's copy of glibc's single-precision cosine, which
   the slope functions use.
+- `cosf` is computed in Zig with fused multiply-adds, so it gives the same
+  bits on every machine, where the original's depends on the C library.
 - `recast.truncateToInt`, C's `(int)` of a float, with x86-64's result
   where C leaves it undefined.
 - `recast.vertex_cells_max`, the limit of the vertex range that
@@ -188,14 +189,15 @@ takes less time):
 
 | feature | port ÷ original |
 | --- | ---: |
-| Whole build | 0.35 to 0.91 |
-| Rasterization, int indices | 0.89 to 0.95 |
-| Distance field | 1.09 to 1.33 |
-| Watershed regions | 0.53 to 0.72 |
-| Detail mesh | 0.09 to 0.76 |
+| Whole build | 0.37 to 0.91 |
+| Rasterization, int indices | 0.90 to 0.95 |
+| Distance field | 1.09 to 1.31 |
+| Watershed regions | 0.58 to 0.89 |
+| Detail mesh | 0.09 to 0.83 |
 
 AMD Ryzen 9 9950X3D, one core, Linux 7.3.3, Zig 0.17.0 ReleaseFast against
-clang 22.1.8 `-O3`, measured while other builds ran on the machine.
+clang 22.1.8 `-O3`, at commit `0c37e46`, with a load average of 1.4 to 3.2
+on 32 hardware threads; the median of three runs.
 
 - [`doc/TESTING.md`](doc/TESTING.md): how the tests compare the port with
   the original, and what this repository's tests cover.
