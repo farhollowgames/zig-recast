@@ -338,14 +338,33 @@ fn getHeight(
 const ev_undef: i32 = -1;
 const ev_hull: i32 = -2;
 
-/// The edge between `s` and `t` in either direction, or `ev_undef`.
-fn findEdge(edges: []const i32, nedges: i32, s: i32, t: i32) i32 {
-    var i: i32 = 0;
-    while (i < nedges) : (i += 1) {
-        const e = edges[@intCast(i * 4)..][0..4];
-        if ((e[0] == s and e[1] == t) or (e[0] == t and e[1] == s)) return i;
+/// The vertices a polygon's detail mesh holds: its own and the samples
+/// added.
+const max_detail_verts = 127;
+
+/// Each edge of a triangulation by its two vertices, either way round:
+/// a triangulation has at most one edge between two vertices.
+const EdgeIndex = struct {
+    /// At `lo * max_detail_verts + hi`, for vertices `lo` <= `hi`, the
+    /// edge's index, or `none`; set for the vertices `init` was given.
+    slots: [max_detail_verts * max_detail_verts]u16,
+
+    const none = std.math.maxInt(u16);
+
+    /// Sets `index` to no edges between the first `nverts` vertices.
+    fn init(index: *EdgeIndex, nverts: i32) void {
+        @memset(index.slots[0..@intCast(nverts * max_detail_verts)], none);
     }
-    return ev_undef;
+
+    fn slot(s: i32, t: i32) usize {
+        return @intCast(@min(s, t) * max_detail_verts + @max(s, t));
+    }
+};
+
+/// The edge between `s` and `t` in either direction, or `ev_undef`.
+fn findEdge(index: *const EdgeIndex, s: i32, t: i32) i32 {
+    const e = index.slots[EdgeIndex.slot(s, t)];
+    return if (e == EdgeIndex.none) ev_undef else e;
 }
 
 /// Adds the edge from `s` to `t` with faces `l` and `r` unless the
@@ -356,6 +375,7 @@ fn addEdge(
     edges: []i32,
     nedges: *i32,
     max_edges: i32,
+    index: *EdgeIndex,
     s: i32,
     t: i32,
     l: i32,
@@ -367,13 +387,14 @@ fn addEdge(
     }
 
     // Add edge if not already in the triangulation.
-    const e = findEdge(edges, nedges.*, s, t);
+    const e = findEdge(index, s, t);
     if (e == ev_undef) {
         const edge = edges[@intCast(nedges.* * 4)..][0..4];
         edge.* = .{ s, t, l, r };
-        const index = nedges.*;
+        const added = nedges.*;
+        index.slots[EdgeIndex.slot(s, t)] = @intCast(added);
         nedges.* += 1;
-        return index;
+        return added;
     }
     return ev_undef;
 }
@@ -420,6 +441,7 @@ fn completeFacet(
     edges: []i32,
     nedges: *i32,
     max_edges: i32,
+    index: *EdgeIndex,
     nfaces: *i32,
     edge_index: i32,
 ) void {
@@ -482,17 +504,17 @@ fn completeFacet(
         updateLeftFace(edge, s, t, nfaces.*);
 
         // Add new edge or update face info of old edge.
-        var e = findEdge(edges, nedges.*, pt, s);
+        var e = findEdge(index, pt, s);
         if (e == ev_undef) {
-            _ = addEdge(ctx, edges, nedges, max_edges, pt, s, nfaces.*, ev_undef);
+            _ = addEdge(ctx, edges, nedges, max_edges, index, pt, s, nfaces.*, ev_undef);
         } else {
             updateLeftFace(edges[@intCast(e * 4)..][0..4], pt, s, nfaces.*);
         }
 
         // Add new edge or update face info of old edge.
-        e = findEdge(edges, nedges.*, t, pt);
+        e = findEdge(index, t, pt);
         if (e == ev_undef) {
-            _ = addEdge(ctx, edges, nedges, max_edges, t, pt, nfaces.*, ev_undef);
+            _ = addEdge(ctx, edges, nedges, max_edges, index, t, pt, nfaces.*, ev_undef);
         } else {
             updateLeftFace(edges[@intCast(e * 4)..][0..4], t, pt, nfaces.*);
         }
@@ -515,11 +537,15 @@ fn delaunayHull(
     tris: *std.ArrayList(i32),
     edges: *std.ArrayList(i32),
 ) Allocator.Error!void {
+    // The edge index holds a polygon's detail vertices.
+    assert(npts <= max_detail_verts);
     var nfaces: i32 = 0;
     var nedges: i32 = 0;
     const max_edges = npts * 10;
     // Only the edges added below are read.
     try edges.resize(gpa, @intCast(max_edges * 4));
+    var index: EdgeIndex = undefined;
+    index.init(npts);
 
     {
         var i: i32 = 0;
@@ -530,17 +556,25 @@ fn delaunayHull(
         }) {
             const s = hull[@intCast(j)];
             const t = hull[@intCast(i)];
-            _ = addEdge(ctx, edges.items, &nedges, max_edges, s, t, ev_hull, ev_undef);
+            _ = addEdge(ctx, edges.items, &nedges, max_edges, &index, s, t, ev_hull, ev_undef);
         }
     }
 
     var current_edge: i32 = 0;
     while (current_edge < nedges) : (current_edge += 1) {
-        if (edges.items[@intCast(current_edge * 4 + 2)] == ev_undef) {
-            completeFacet(ctx, pts, npts, edges.items, &nedges, max_edges, &nfaces, current_edge);
-        }
-        if (edges.items[@intCast(current_edge * 4 + 3)] == ev_undef) {
-            completeFacet(ctx, pts, npts, edges.items, &nedges, max_edges, &nfaces, current_edge);
+        for (2..4) |side| {
+            if (edges.items[@as(usize, @intCast(current_edge * 4)) + side] != ev_undef) continue;
+            completeFacet(
+                ctx,
+                pts,
+                npts,
+                edges.items,
+                &nedges,
+                max_edges,
+                &index,
+                &nfaces,
+                current_edge,
+            );
         }
     }
 
@@ -773,7 +807,7 @@ fn buildPolyDetail(
     samples: *std.ArrayList(i32),
     search: *SampleSearch,
 ) Allocator.Error!void {
-    const max_verts = 127;
+    const max_verts = max_detail_verts;
     // Max tris for delaunay is 2n-2-k (n=num verts, k=num hull verts).
     const max_tris = 255;
     const max_verts_per_edge = 32;
