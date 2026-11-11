@@ -78,20 +78,26 @@ pub fn erodeWalkableArea(
     defer gpa.free(distance_to_boundary);
     @memset(distance_to_boundary, 0xff);
 
+    // The field is read through local slices: through `chf`, every store to
+    // a distance would load them again.
+    const cells = chf.cells;
+    const spans = chf.spans;
+    const areas = chf.areas;
+
     // Mark boundary cells.
     var z: i32 = 0;
     while (z < z_size) : (z += 1) {
         var x: i32 = 0;
         while (x < x_size) : (x += 1) {
-            const cell = chf.cells[@intCast(x + z * z_stride)];
+            const cell = cells[@intCast(x + z * z_stride)];
             var span_index: i32 = cell.index;
             const max_span_index = @as(i32, cell.index) + cell.count;
             while (span_index < max_span_index) : (span_index += 1) {
-                if (chf.areas[@intCast(span_index)] == null_area) {
+                if (areas[@intCast(span_index)] == null_area) {
                     distance_to_boundary[@intCast(span_index)] = 0;
                     continue;
                 }
-                const span = chf.spans[@intCast(span_index)];
+                const span = spans[@intCast(span_index)];
 
                 // Check for a walkable neighbour in each of the 4 cardinal directions.
                 var neighbor_count: i32 = 0;
@@ -100,9 +106,9 @@ pub fn erodeWalkableArea(
                     if (neighbor_connection == not_connected) break;
                     const neighbor_x = x + getDirOffsetX(direction);
                     const neighbor_z = z + getDirOffsetY(direction);
-                    const neighbor_cell = chf.cells[@intCast(neighbor_x + neighbor_z * z_stride)];
+                    const neighbor_cell = cells[@intCast(neighbor_x + neighbor_z * z_stride)];
                     const neighbor_span_index = @as(i32, neighbor_cell.index) + neighbor_connection;
-                    if (chf.areas[@intCast(neighbor_span_index)] == null_area) break;
+                    if (areas[@intCast(neighbor_span_index)] == null_area) break;
                     neighbor_count += 1;
                 }
 
@@ -117,26 +123,26 @@ pub fn erodeWalkableArea(
     while (z < z_size) : (z += 1) {
         var x: i32 = 0;
         while (x < x_size) : (x += 1) {
-            const cell = chf.cells[@intCast(x + z * z_stride)];
+            const cell = cells[@intCast(x + z * z_stride)];
             const max_span_index = @as(i32, cell.index) + cell.count;
             var span_index: i32 = cell.index;
             while (span_index < max_span_index) : (span_index += 1) {
-                const span = chf.spans[@intCast(span_index)];
+                const span = spans[@intCast(span_index)];
 
                 if (getCon(span, 0) != not_connected) {
                     // (-1,0)
                     const a_x = x + getDirOffsetX(0);
                     const a_y = z + getDirOffsetY(0);
-                    const a_index = @as(i32, chf.cells[@intCast(a_x + a_y * x_size)].index) +
+                    const a_index = @as(i32, cells[@intCast(a_x + a_y * x_size)].index) +
                         getCon(span, 0);
-                    const a_span = chf.spans[@intCast(a_index)];
+                    const a_span = spans[@intCast(a_index)];
                     lowerDistance(distance_to_boundary, span_index, a_index, 2);
 
                     // (-1,-1)
                     if (getCon(a_span, 3) != not_connected) {
                         const b_x = a_x + getDirOffsetX(3);
                         const b_y = a_y + getDirOffsetY(3);
-                        const b_index = @as(i32, chf.cells[@intCast(b_x + b_y * x_size)].index) +
+                        const b_index = @as(i32, cells[@intCast(b_x + b_y * x_size)].index) +
                             getCon(a_span, 3);
                         lowerDistance(distance_to_boundary, span_index, b_index, 3);
                     }
@@ -145,16 +151,16 @@ pub fn erodeWalkableArea(
                     // (0,-1)
                     const a_x = x + getDirOffsetX(3);
                     const a_y = z + getDirOffsetY(3);
-                    const a_index = @as(i32, chf.cells[@intCast(a_x + a_y * x_size)].index) +
+                    const a_index = @as(i32, cells[@intCast(a_x + a_y * x_size)].index) +
                         getCon(span, 3);
-                    const a_span = chf.spans[@intCast(a_index)];
+                    const a_span = spans[@intCast(a_index)];
                     lowerDistance(distance_to_boundary, span_index, a_index, 2);
 
                     // (1,-1)
                     if (getCon(a_span, 2) != not_connected) {
                         const b_x = a_x + getDirOffsetX(2);
                         const b_y = a_y + getDirOffsetY(2);
-                        const b_index = @as(i32, chf.cells[@intCast(b_x + b_y * x_size)].index) +
+                        const b_index = @as(i32, cells[@intCast(b_x + b_y * x_size)].index) +
                             getCon(a_span, 2);
                         lowerDistance(distance_to_boundary, span_index, b_index, 3);
                     }
@@ -168,26 +174,26 @@ pub fn erodeWalkableArea(
     while (z >= 0) : (z -= 1) {
         var x = x_size - 1;
         while (x >= 0) : (x -= 1) {
-            const cell = chf.cells[@intCast(x + z * z_stride)];
+            const cell = cells[@intCast(x + z * z_stride)];
             const max_span_index = @as(i32, cell.index) + cell.count;
             var span_index: i32 = cell.index;
             while (span_index < max_span_index) : (span_index += 1) {
-                const span = chf.spans[@intCast(span_index)];
+                const span = spans[@intCast(span_index)];
 
                 if (getCon(span, 2) != not_connected) {
                     // (1,0)
                     const a_x = x + getDirOffsetX(2);
                     const a_y = z + getDirOffsetY(2);
-                    const a_index = @as(i32, chf.cells[@intCast(a_x + a_y * x_size)].index) +
+                    const a_index = @as(i32, cells[@intCast(a_x + a_y * x_size)].index) +
                         getCon(span, 2);
-                    const a_span = chf.spans[@intCast(a_index)];
+                    const a_span = spans[@intCast(a_index)];
                     lowerDistance(distance_to_boundary, span_index, a_index, 2);
 
                     // (1,1)
                     if (getCon(a_span, 1) != not_connected) {
                         const b_x = a_x + getDirOffsetX(1);
                         const b_y = a_y + getDirOffsetY(1);
-                        const b_index = @as(i32, chf.cells[@intCast(b_x + b_y * x_size)].index) +
+                        const b_index = @as(i32, cells[@intCast(b_x + b_y * x_size)].index) +
                             getCon(a_span, 1);
                         lowerDistance(distance_to_boundary, span_index, b_index, 3);
                     }
@@ -196,16 +202,16 @@ pub fn erodeWalkableArea(
                     // (0,1)
                     const a_x = x + getDirOffsetX(1);
                     const a_y = z + getDirOffsetY(1);
-                    const a_index = @as(i32, chf.cells[@intCast(a_x + a_y * x_size)].index) +
+                    const a_index = @as(i32, cells[@intCast(a_x + a_y * x_size)].index) +
                         getCon(span, 1);
-                    const a_span = chf.spans[@intCast(a_index)];
+                    const a_span = spans[@intCast(a_index)];
                     lowerDistance(distance_to_boundary, span_index, a_index, 2);
 
                     // (-1,1)
                     if (getCon(a_span, 0) != not_connected) {
                         const b_x = a_x + getDirOffsetX(0);
                         const b_y = a_y + getDirOffsetY(0);
-                        const b_index = @as(i32, chf.cells[@intCast(b_x + b_y * x_size)].index) +
+                        const b_index = @as(i32, cells[@intCast(b_x + b_y * x_size)].index) +
                             getCon(a_span, 0);
                         lowerDistance(distance_to_boundary, span_index, b_index, 3);
                     }
@@ -217,7 +223,7 @@ pub fn erodeWalkableArea(
     // The radius converts to the distance's unsigned char, wrapping as in C.
     const min_boundary_distance: u8 = @truncate(@as(u32, @bitCast(erosion_radius *% 2)));
     for (distance_to_boundary, 0..) |distance, span_index| {
-        if (distance < min_boundary_distance) chf.areas[span_index] = null_area;
+        if (distance < min_boundary_distance) areas[span_index] = null_area;
     }
 }
 
