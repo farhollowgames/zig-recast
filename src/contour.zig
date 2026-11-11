@@ -820,16 +820,19 @@ pub fn buildContours(
 
     ctx.startTimer(.build_contours_trace);
 
-    // Mark boundaries.
+    // Mark boundaries. The cells and spans are read through local slices:
+    // through `chf`, every store to a flag would load them again.
+    const cells = chf.cells;
+    const spans = chf.spans;
     var y: i32 = 0;
     while (y < h) : (y += 1) {
         var x: i32 = 0;
         while (x < w) : (x += 1) {
-            const c = chf.cells[@intCast(x + y * w)];
+            const c = cells[@intCast(x + y * w)];
             const first: usize = c.index;
             for (first..first + c.count) |i| {
                 var res: u8 = 0;
-                const s = chf.spans[i];
+                const s = spans[i];
                 if (s.reg == 0 or (s.reg & border_reg) != 0) {
                     flags[i] = 0;
                     continue;
@@ -839,8 +842,8 @@ pub fn buildContours(
                     if (getCon(s, dir) != not_connected) {
                         const ax = x + getDirOffsetX(dir);
                         const ay = y + getDirOffsetY(dir);
-                        const ai = spanIndex(chf, ax, ay, getCon(s, dir));
-                        r = chf.spans[ai].reg;
+                        const a_first: usize = cells[@intCast(ax + ay * w)].index;
+                        r = spans[a_first + @as(usize, @intCast(getCon(s, dir)))].reg;
                     }
                     if (r == s.reg) res |= @as(u8, 1) << dir;
                 }
