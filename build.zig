@@ -22,6 +22,12 @@ pub fn build(b: *std.Build) void {
         "test-filter",
         "Skip tests that do not match any filter",
     ) orelse &.{};
+    const fuzz_seed = b.option(
+        u64,
+        "fuzz-seed",
+        "Offset every fuzz test's seeds, to run other cases (default 0)",
+    ) orelse 0;
+    const fuzz_replay = b.option(u64, "fuzz-replay", "Run only this seed in each fuzz test");
 
     const recast_test_mod = b.createModule(.{
         .root_source_file = b.path("src/recast.zig"),
@@ -40,6 +46,9 @@ pub fn build(b: *std.Build) void {
     if (!b.isRoot()) return;
     const upstream = b.lazyDependency("recastnavigation", .{}) orelse return;
 
+    const fuzz_options = b.addOptions();
+    fuzz_options.addOption(u64, "fuzz_seed", fuzz_seed);
+    fuzz_options.addOption(?u64, "fuzz_replay", fuzz_replay);
     const differential = b.addTest(.{
         .name = "differential",
         .root_module = b.createModule(.{
@@ -47,7 +56,10 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
-            .imports = &.{.{ .name = "recast", .module = recast_test_mod }},
+            .imports = &.{
+                .{ .name = "recast", .module = recast_test_mod },
+                .{ .name = "fuzz_options", .module = fuzz_options.createModule() },
+            },
         }),
         .filters = test_filters,
     });

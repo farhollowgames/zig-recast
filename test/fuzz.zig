@@ -3,7 +3,8 @@
 //! slopes, bounds, polygons and helper inputs through the functions that
 //! take them; every output compared byte for byte. Each test runs at least
 //! 1,000 cases from fixed seeds and prints the seed of a case that fails:
-//! set `replay` to it to run that case alone.
+//! `-Dfuzz-replay=` that seed runs that case alone, and `-Dfuzz-seed=N`
+//! runs other cases.
 
 const std = @import("std");
 const recast = @import("recast");
@@ -11,29 +12,36 @@ const upstream = @import("upstream.zig");
 const meshes = @import("meshes.zig");
 const oracle = @import("oracle.zig");
 const pipeline = @import("pipeline.zig");
+const fuzz_options = @import("fuzz_options");
 
 const testing = std.testing;
 const gpa = testing.allocator;
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 
-/// The seed of a failed case, to run only that case in each fuzz test.
-const replay: ?u64 = null;
+/// `-Dfuzz-seed`: offsets the seeds of every fuzz test; 0, the default,
+/// runs the recorded cases.
+const seed_offset: u64 = fuzz_options.fuzz_seed;
 
-/// Runs `check` on `count` seeds made from `salt`, or on `replay` alone,
-/// and prints the seed of a case that fails.
+/// `-Dfuzz-replay`: the seed of a failed case, to run only that case in
+/// each fuzz test.
+const replay: ?u64 = fuzz_options.fuzz_replay;
+
+/// Runs `check` on `count` seeds made from `salt` and the seed offset, or
+/// on the replayed seed alone, and prints the seed of a case that fails.
 fn fuzz(name: []const u8, salt: u64, count: usize, check: anytype) !void {
     upstream.shim_init();
     if (replay) |seed| return runSeed(name, seed, check);
-    for (0..count) |i| try runSeed(name, splitMix(salt +% i), check);
+    for (0..count) |i| try runSeed(name, splitMix((salt ^ seed_offset) +% i), check);
 }
 
 fn runSeed(name: []const u8, seed: u64, check: anytype) !void {
     check(seed) catch |err| {
-        std.debug.print(
-            "{s}: seed 0x{x} fails; set `replay` in test/fuzz.zig to it to run it alone\n",
-            .{ name, seed },
-        );
+        std.debug.print("{s}: seed {d} fails; -Dfuzz-replay={d} runs it alone\n", .{
+            name,
+            seed,
+            seed,
+        });
         return err;
     };
 }
