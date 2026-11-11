@@ -120,6 +120,27 @@ test "one triangle builds as the original, with and without a border" {
     }
 }
 
+test "borders of half the field and wider build as the original" {
+    // Two triangles over the whole field, under borders from half its
+    // width, which leaves no cell inside, to wider than the field.
+    const verts = [_]f32{ 0, 1, 0, 0, 1, 8, 8, 1, 8, 8, 1, 0 };
+    const tris = [_]i32{ 0, 1, 2, 0, 2, 3 };
+    const areas = [_]u8{ 0, 0 };
+    for ([_]i32{ 3, 4, 5, 8, 9, 30 }) |border| {
+        var cfg = tile(8, 8, 4);
+        cfg.border_size = border;
+        const tiles = [_]recast.Config{cfg};
+        const case: pipeline.Case = .{
+            .verts = &verts,
+            .tris = &tris,
+            .areas = &areas,
+            .layers = true,
+            .tiles = &tiles,
+        };
+        _ = try expectSameEveryPartition(case, "wide border");
+    }
+}
+
 test "one span builds as the original" {
     const spans = [_]pipeline.ExtraSpan{walkableSpan(0, 0, 0, 2)};
     for ([_]i32{ 1, 3 }) |size| {
