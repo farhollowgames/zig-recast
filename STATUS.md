@@ -196,6 +196,10 @@ the port does:
   heightfield layers), or than its longer side less one (the monotone and
   layer partitions), overruns the original's sweep buffer. The port's
   buffers hold every row.
+- **Polygons of more than 127 vertices** (a poly mesh's `nvp` of 128 or
+  more) overrun the original's hull buffer in the detail mesh, and past 256
+  its vertex buffer. The port stops on them in Debug and ReleaseSafe; in
+  ReleaseFast it overruns its own hull buffer.
 - **A detail sample distance of 0 or less.** The original never returns;
   the port triangulates the polygon's own vertices.
 - **Out of memory.** The original carries on after some failed

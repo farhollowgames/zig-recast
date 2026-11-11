@@ -142,6 +142,12 @@ upstream's own tests; `STATUS.md` lists the tests of every feature.
   the original only triangles inside that range, compare the two out to
   its edge, and check the refusal on every entry point; heights take any
   float.
+- **Polygons of more than 127 vertices.** `rcBuildPolyMeshDetail` holds a
+  polygon's hull in 127 entries on its stack and its vertices in 256, and
+  writes past them for a polygon with more; a poly mesh can hold one when
+  its `nvp` is 128 or more. The port is no safer there: it stops in
+  Debug and ReleaseSafe, on an index out of bounds, and in ReleaseFast it
+  writes past its own hull buffer as the original does.
 - **A detail sample distance of 0 or less.** `rcBuildPolyMeshDetail` never
   finishes in the original there (its hull stays empty and
   `triangulateHull` loops forever). The port triangulates the polygon's own
