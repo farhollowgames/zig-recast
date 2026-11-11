@@ -11,7 +11,7 @@ tests and the benchmark only), from `Recast.h`, `RecastAlloc.h` and
   inputs and compare every output byte, return value, log message and timer
   call;
 - **benchmarked**: timed against the original by `zig build bench`, with
-  its own table in the README;
+  its own table in [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md);
 - **reviewed**: a reviewer that did not write the port has tried to break
   it.
 
@@ -44,9 +44,11 @@ between. The named tests are in `test/`; these sets run many of them:
   run on both sides (`upstream_tests.zig`).
 
 Each fuzz test runs at least 1,000 cases and prints its seed on a failure;
-setting `replay` in `fuzz.zig` reruns that case alone. Recast has no
-threads of its own; "tiles build the same on every thread count, as the
-original builds them" builds a tiled navmesh on 1, 2 and 8 threads.
+`-Dfuzz-replay=` that seed reruns that case alone, and `-Dfuzz-seed=N` runs
+other cases. Recast has no threads of its own; "tiles build the same on
+every thread count, as the original builds them" builds a tiled navmesh on
+1, 2, 4 and 8 threads. [`doc/TESTING.md`](doc/TESTING.md) describes the
+tests.
 
 ## Recast.h and Recast.cpp
 
@@ -67,7 +69,8 @@ original builds them" builds a tiled navmesh on 1, 2 and 8 threads.
 | `rcAllocHeightfield`, `rcFreeHeightField`, `rcAllocCompactHeightfield`, `rcFreeCompactHeightfield`, `rcAllocHeightfieldLayerSet`, `rcFreeHeightfieldLayerSet`, `rcAllocContourSet`, `rcFreeContourSet`, `rcAllocPolyMesh`, `rcFreePolyMesh`, `rcAllocPolyMeshDetail`, `rcFreePolyMeshDetail` | the functions that build a structure return it, and its `deinit` frees it | every test runs on `std.testing.allocator`, which fails on leaks and double frees; "a failed allocation fails each step of a build and leaks nothing" | ported |
 | `rcCreateHeightfield` | `Heightfield.init` | upstream; meshes; scenes | benchmarked |
 | `rcCalcBounds`, `rcCalcGridSize` | `calcBounds`, `calcGridSize` | "fuzz: bounds and grid sizes match, with odd floats"; upstream; scenes | benchmarked |
-| `rcMarkWalkableTriangles`, `rcClearUnwalkableTriangles` | `markWalkableTriangles`, `clearUnwalkableTriangles` | "fuzz: triangles are marked and cleared the same at any slope"; "walkable triangles match at every slope"; "slope thresholds are cosines correctly rounded, as the original's linked cosf gives"; upstream | benchmarked |
+| `rcMarkWalkableTriangles`, `rcClearUnwalkableTriangles` | `markWalkableTriangles`, `clearUnwalkableTriangles` | "fuzz: triangles are marked and cleared the same at any slope"; "walkable triangles match at every slope"; "a normal between glibc's cosine and the correctly rounded one marks as the original"; upstream | benchmarked |
+| C's `cosf`, which the two above call for their thresholds | `cosf`, the port's copy of glibc's | "the slope's cosine is glibc's cosf on every float from 2^-12 to pi, and on a sweep of all"; "the cosine is within a float step of the rounded double cosine on a sweep of all floats"; "glibc's cosine is a float step from the rounded one on 25 tenths of a degree" | oracle-tested |
 | `rcGetHeightFieldSpanCount` | `getHeightFieldSpanCount` | meshes; scenes | benchmarked |
 | `rcBuildCompactHeightfield` | `buildCompactHeightfield` | meshes; scenes; "fuzz: spans added directly merge, filter and compact as the original's"; "a column of more than 63 floors logs too many layers as the original"; "a column of more walkable spans than a compact cell counts wraps as the original's" | benchmarked |
 | `rcSetCon`, `rcGetCon` | `setCon`, `getCon` | "fuzz: span connections set and get the same bits" | oracle-tested |
@@ -134,7 +137,7 @@ instructions.
 
 | upstream | zig-recast | tests | state |
 | --- | --- | --- | --- |
-| `rcBuildPolyMeshDetail` | `buildPolyMeshDetail` | "detail meshes match for every sample distance and error"; meshes; scenes | benchmarked |
+| `rcBuildPolyMeshDetail` | `buildPolyMeshDetail` | "detail meshes match for every sample distance and error"; "polygons of up to 127 vertices build their detail as the original, and larger ones fail"; meshes; scenes | benchmarked |
 | `rcMergePolyMeshDetails` | `mergePolyMeshDetails` | "tiles build the same on every thread count, as the original builds them"; scenes | benchmarked |
 
 ## RecastLayers.cpp
@@ -143,7 +146,9 @@ instructions.
 | --- | --- | --- | --- |
 | `rcBuildHeightfieldLayers` | `buildHeightfieldLayers` | "heightfield layers build the same with borders"; "more than 255 layer regions fail the heightfield layers as the original"; "a floor under more platforms than a layer holds fails the layers as the original"; meshes; scenes | benchmarked |
 
-## Left out, for the author's approval
+## Left out
+
+The author has approved this list.
 
 | upstream | why | in its place |
 | --- | --- | --- |
@@ -202,9 +207,10 @@ the port does:
   layer partitions), overruns the original's sweep buffer. The port's
   buffers hold every row.
 - **Polygons of more than 127 vertices** (a poly mesh's `nvp` of 128 or
-  more) overrun the original's hull buffer in the detail mesh, and past 256
-  its vertex buffer. The port stops on them in Debug and ReleaseSafe; in
-  ReleaseFast it overruns its own hull buffer.
+  more can hold one) overrun the original's hull buffer in the detail mesh,
+  and past 256 its vertex buffer. The port refuses them, in every build:
+  `buildPolyMeshDetail` logs the refusal and returns
+  `error.TooManyPolygonVertices` before any work.
 - **A detail sample distance of 0 or less.** The original never returns;
   the port triangulates the polygon's own vertices.
 - **Out of memory.** The original carries on after some failed
@@ -212,6 +218,4 @@ the port does:
 
 ## Next
 
-1. The author's decisions: the left-out list above, and what the port does
-   with polygons of more than 127 vertices.
-2. The benchmark rerun on a quiet machine, then a release.
+1. The benchmark rerun on a quiet machine, then a release.

@@ -7,7 +7,7 @@
 //! the square kilometre of rolling ground a Loomwork world starts with.
 //! Each figure is the median of several runs; the two sides take turns,
 //! tile by tile, and which goes first changes from run to run. It prints a
-//! Markdown table per feature, as the README shows them.
+//! Markdown table per feature, as doc/BENCHMARKS.md shows them.
 //!
 //!   zig build bench -- [--runs n] [--warmup n] [--only part of an input's name]
 //!                       [--cpu n]
