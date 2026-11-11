@@ -852,3 +852,59 @@ test "connections pack six bits per direction" {
     try testing.expectEqual(3, getDirForOffset(0, -1));
     try testing.expectEqual(-1, getDirForOffset(0, 0));
 }
+
+/// Every step of the build of a floor under a platform, freeing all it
+/// made: a failed allocation must fail the step it is in and leak nothing.
+fn buildFloorUnderPlatform(gpa: Allocator) !void {
+    const ctx: Context = .none;
+    const verts = [_]f32{
+        0, 0, 0, 16, 0, 0, 16, 0, 16, 0, 0, 16,
+        5, 2, 5, 11, 2, 5, 11, 2, 11, 5, 2, 11,
+    };
+    const tris = [_]i32{ 0, 3, 2, 0, 2, 1, 4, 7, 6, 4, 6, 5 };
+    var areas: [4]u8 = @splat(0);
+    const border = 2;
+    var hf: Heightfield = try .init(gpa, 36, 36, &.{ -1, -1, -1 }, &.{ 17, 4, 17 }, 0.5, 0.25);
+    defer hf.deinit(gpa);
+    markWalkableTriangles(ctx, 45, &verts, &tris, &areas);
+    try rasterizeTriangles(ctx, gpa, &verts, i32, &tris, &areas, &hf, 1);
+    filterLowHangingWalkableObstacles(ctx, 1, &hf);
+    filterLedgeSpans(ctx, 4, 1, &hf);
+    filterWalkableLowHeightSpans(ctx, 4, &hf);
+    var chf = try buildCompactHeightfield(ctx, gpa, 4, 1, &hf);
+    defer chf.deinit(gpa);
+    try erodeWalkableArea(ctx, gpa, 1, &chf);
+    try medianFilterWalkableArea(ctx, gpa, &chf);
+
+    var lset = try buildHeightfieldLayers(ctx, gpa, &chf, border, 4);
+    defer lset.deinit(gpa);
+    try testing.expectEqual(2, lset.layers.len);
+
+    try buildRegionsMonotone(ctx, gpa, &chf, border, 0, 0);
+    var monotone = try buildContours(ctx, gpa, &chf, 1.3, 12, .default);
+    defer monotone.deinit(gpa);
+    try buildLayerRegions(ctx, gpa, &chf, border, 0);
+    var layered = try buildContours(ctx, gpa, &chf, 1.3, 12, .default);
+    defer layered.deinit(gpa);
+
+    try buildDistanceField(ctx, gpa, &chf);
+    try buildRegions(ctx, gpa, &chf, border, 0, 0);
+    var cset = try buildContours(ctx, gpa, &chf, 1.3, 12, .default);
+    defer cset.deinit(gpa);
+    var pmesh = try buildPolyMesh(ctx, gpa, &cset, 6);
+    defer pmesh.deinit(gpa);
+    var dmesh = try buildPolyMeshDetail(ctx, gpa, &pmesh, &chf, 3, 1);
+    defer dmesh.deinit(gpa);
+    try testing.expect(pmesh.npolys >= 2 and dmesh.ntris > pmesh.npolys);
+
+    var copy = try copyPolyMesh(ctx, gpa, &pmesh);
+    defer copy.deinit(gpa);
+    var merged = try mergePolyMeshes(ctx, gpa, &.{ &pmesh, &copy });
+    defer merged.deinit(gpa);
+    var merged_detail = try mergePolyMeshDetails(ctx, gpa, &.{ &dmesh, &dmesh });
+    defer merged_detail.deinit(gpa);
+}
+
+test "a failed allocation fails each step of a build and leaks nothing" {
+    try testing.checkAllAllocationFailures(testing.allocator, buildFloorUnderPlatform, .{});
+}
