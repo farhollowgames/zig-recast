@@ -94,8 +94,10 @@ work is split.
 
 `zig build test` fetches the original at the pinned commit, builds it from
 source (test-only code, never part of the package) and runs it and the port
-on the same inputs. After every step, the two must agree on every byte of
-every structure, every log message and every timer call. The inputs are:
+on the same inputs. In the pipeline tests, after every step, the two must
+agree on every byte of every structure, every log message and every timer
+call; the tile tests compare the logs and each tile's meshes. The inputs
+are:
 
 - RecastDemo's three test meshes and a generated terrain with cliffs,
   holes, pillars, stairs, stacked floors and a bridge, under RecastDemo's

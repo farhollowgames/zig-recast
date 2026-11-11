@@ -20,8 +20,10 @@ except the allocation functions, which have no output to compare.
 
 ## The tests
 
-Every oracle test compares each structure field by field after every step.
-The named tests are in `test/`; these sets run many of them:
+The pipeline tests (meshes, scenes, edges) compare each structure field by
+field after every step. The tile tests compare the logs and each tile's
+poly mesh and detail mesh, and the merges of them, but not the steps
+between. The named tests are in `test/`; these sets run many of them:
 
 - **meshes**: RecastDemo's three meshes (`dungeon`, `nav_test`,
   `undulating`) and a generated terrain with cliffs, holes, pillars, stairs,
@@ -46,6 +48,8 @@ original builds them" builds a tiled navmesh on 1, 2 and 8 threads.
 | upstream | zig-recast | tests | state |
 | --- | --- | --- | --- |
 | `rcContext`: `log`, `resetLog`, `enableLog`, `startTimer`, `stopTimer`, `resetTimers`, `enableTimer`, `getAccumulatedTime`, the `do…` virtual methods | `Context`, with a `Sink` for the virtual methods | "the context logs, cuts messages and times as the original's"; every oracle test compares log and timer calls | oracle-tested |
+| `rcContext(bool state = true)` | `Context`'s `log_enabled` and `timer_enabled`, both true unless set | as above | oracle-tested |
+| default arguments: `flagMergeThreshold = 1` on the three rasterize functions, `buildFlags = RC_CONTOUR_TESS_WALL_EDGES` on `rcBuildContours` | Zig has no default arguments: callers pass the threshold, and `ContourBuildFlags.default` is the wall-edge flag | the rasterization and contour rows | oracle-tested |
 | `rcScopedTimer` | `startTimer` with `defer stopTimer` | every oracle test compares timer calls | oracle-tested |
 | `rcLogCategory`, `rcTimerLabel`, `RC_MAX_TIMERS` | `LogCategory`, `TimerLabel`, `max_timers` | "constants, log categories and timer labels have the original's values" | oracle-tested |
 | `RC_PI`, `RC_SPAN_HEIGHT_BITS`, `RC_SPAN_MAX_HEIGHT`, `RC_SPANS_PER_POOL`, `RC_BORDER_REG`, `RC_MULTIPLE_REGS`, `RC_BORDER_VERTEX`, `RC_AREA_BORDER`, `RC_CONTOUR_REG_MASK`, `RC_MESH_NULL_IDX`, `RC_NULL_AREA`, `RC_WALKABLE_AREA`, `RC_NOT_CONNECTED` | the same in snake case (`span_max_height`) | as above | oracle-tested |
@@ -139,10 +143,10 @@ instructions.
 | upstream | why | in its place |
 | --- | --- | --- |
 | `rcSwap`, `rcAbs`, `rcSqr`, `rcVcopy`, `rcIgnoreUnused` | Zig has them built in | `std.mem.swap`, `@abs` (upstream calls `rcAbs` only on integers and `fabsf` on floats, which `@abs` matches), `x * x`, assignment, `_ =` |
-| `rcAllocSetCustom`, `rcAlloc`, `rcFree`, `rcAllocHint`, `rcAllocFunc`, `rcFreeFunc`, `rcNewTag`, `rcScopedDelete`, `RC_SIZE_MAX` | Zig passes allocators | a `std.mem.Allocator` parameter on every function that allocates; `defer` |
+| `rcAllocSetCustom`, `rcAlloc`, `rcFree`, `rcAllocHint` with `RC_ALLOC_PERM` and `RC_ALLOC_TEMP`, `rcAllocFunc`, `rcFreeFunc`, `rcNewTag`, `rcScopedDelete`, `rcSizeType`, `RC_SIZE_MAX` | Zig passes allocators, and sizes are `usize` | a `std.mem.Allocator` parameter on every function that allocates; `defer` |
 | `rcVectorBase`, `rcTempVector`, `rcPermVector`, and their tests (`Tests_Alloc.cpp`, `Bench_rcVector.cpp`) | a container std already has | `std.ArrayList` |
 | `rcLikely`, `rcUnlikely` | compiler hints, with no behaviour | none |
-| `rcAssert`, `rcAssertFailSetCustom`, `rcAssertFailGetCustom` | Zig has assertions and a replaceable panic handler | `std.debug.assert`; the panic handler |
+| `rcAssert`, `rcAssertFailFunc`, `rcAssertFailSetCustom`, `rcAssertFailGetCustom` | Zig has assertions and a replaceable panic handler | `std.debug.assert`; the panic handler |
 | DebugUtils (`RecastDebugDraw`, `RecastDump`) | not part of Recast's library: debug drawing and text dumps for RecastDemo | none |
 
 ## Malformed input, and where upstream is undefined
@@ -160,7 +164,20 @@ the field and the bounds of no vertices. The port does not promise the
 original's result on them. Rasterization refuses every triangle on cells
 of size 0 or less (`error.NonFiniteVertex`); in Debug and ReleaseSafe the
 port stops on the last four, with an integer overflow, an index out of
-bounds or an assertion.
+bounds or an assertion. It stops the same way on these, where the original
+reads past its buffers, truncates, returns an empty mesh or fails to
+allocate:
+
+- poly meshes of different `nvp` merged: both sides read each mesh with the
+  first mesh's `nvp`, and where that runs past a mesh's polygons, the port
+  stops;
+- a negative contour, vertex or polygon count, or an `nvp` of 0;
+- `buildRegions` on a field with no distance field;
+- an `nvp` past 65536, or sizes whose product passes 2^31 (the original
+  truncates the first and computes the second in `size_t`).
+
+`rcMergePolyMeshDetails` skips null entries in its array; the port takes a
+slice of pointers, which holds none.
 
 Upstream also writes past its buffers on some inputs a caller could pass.
 The tests keep the original away from them, and `doc/parity.md` says what
