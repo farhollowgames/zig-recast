@@ -905,10 +905,15 @@ test "walkable triangles match at every slope" {
     }
 }
 
-test "slope thresholds round as the original's cosf" {
-    var slope: f32 = 0;
-    while (slope <= 90) : (slope += 0.125) {
+test "slope thresholds are cosines correctly rounded, as the original's linked cosf gives" {
+    // The original here links the port's cosf, Zig's compiler_rt, which
+    // gives the cosine correctly rounded on every tenth of a degree up to
+    // 180. glibc's cosf does not on 25 of them, 49 degrees among them.
+    for (0..1801) |tenths| {
+        const slope = @as(f32, @floatFromInt(tenths)) / 10;
         const x = slope / 180.0 * recast.pi;
+        const rounded: f32 = @floatCast(@cos(@as(f64, x)));
+        try testing.expectEqual(@as(u32, @bitCast(rounded)), @as(u32, @bitCast(@cos(x))));
         try testing.expectEqual(
             @as(u32, @bitCast(upstream.shim_cosf(x))),
             @as(u32, @bitCast(@cos(x))),

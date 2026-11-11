@@ -44,7 +44,7 @@ upstream's own tests; `STATUS.md` lists the tests of every feature.
 | `rcSetCon`, `rcGetCon`, `rcGetDirOffsetX`, `rcGetDirOffsetY`, `rcGetDirForOffset` | `setCon`, `getCon`, `getDirOffsetX`, `getDirOffsetY`, `getDirForOffset` | "fuzz: span connections set and get the same bits"; "directions and their offsets match for every direction" |
 | `rcMin`, `rcMax`, `rcClamp`, `rcSqr`, `rcAbs`, `rcSwap`, `rcSqrt`, `rcVcross`, `rcVdot`, `rcVmad`, `rcVadd`, `rcVsub`, `rcVmin`, `rcVmax`, `rcVcopy`, `rcVdist`, `rcVdistSqr`, `rcVnormalize` | `selectMin`, `selectMax`, `clamp`, `@abs`, `std.mem.swap`, `@sqrt`, `vcross`, `vdot`, `vmad`, `vadd`, `vsub`, `vmin`, `vmax`, assignment, `vdist`, `vdistSqr`, `vnormalize` | "fuzz: min, max, clamp, square root and float to int match C++"; "fuzz: vector helpers give the same floats"; upstream's cases |
 | `rcCalcBounds`, `rcCalcGridSize` | `calcBounds`, `calcGridSize` | "fuzz: bounds and grid sizes match, with odd floats"; pipeline tests compare both |
-| `rcMarkWalkableTriangles`, `rcClearUnwalkableTriangles` | `markWalkableTriangles`, `clearUnwalkableTriangles` | "fuzz: triangles are marked and cleared the same at any slope"; "walkable triangles match at every slope"; "slope thresholds round as the original's cosf" |
+| `rcMarkWalkableTriangles`, `rcClearUnwalkableTriangles` | `markWalkableTriangles`, `clearUnwalkableTriangles` | "fuzz: triangles are marked and cleared the same at any slope"; "walkable triangles match at every slope"; "slope thresholds are cosines correctly rounded, as the original's linked cosf gives" |
 | `rcGetHeightFieldSpanCount` | `getHeightFieldSpanCount` | pipeline tests |
 | `rcBuildCompactHeightfield` | `buildCompactHeightfield` | pipeline tests; "a column of more than 63 floors logs too many layers as the original" |
 
@@ -147,6 +147,14 @@ upstream's own tests; `STATUS.md` lists the tests of every feature.
   `triangulateHull` loops forever). The port triangulates the polygon's own
   vertices, which is what the original's edge pass gives when it adds no
   samples.
+- **The cosine of the slope.** The walkable slope's threshold is `cosf` of
+  the angle, which each C library rounds its own way. The port's `@cos`
+  is Zig's compiler_rt `cosf`, correctly rounded on every tenth of a
+  degree up to 180, and the tests link the original to the same one.
+  glibc's `cosf` is one float step off on 25 of those 1,801 angles (49,
+  64, 74 and 104 degrees among the whole ones; 45 and 50 agree), so an
+  original built against glibc marks a triangle differently where its
+  normal's y falls between the two thresholds.
 - **Float to int.** C's `(int)` of a float out of range is undefined; the
   port gives what x86-64 gives (the most negative int), on every machine.
 - **Edge lengths past 46340.** `rcBuildContours` squares `maxEdgeLen` in an
