@@ -76,7 +76,7 @@ instructions.
 | upstream | zig-recast | tests | state |
 | --- | --- | --- | --- |
 | `rcAddSpan`, with its span pools | `addSpan` | "fuzz: spans added directly merge, filter and compact as the original's"; "spans added directly merge, wrap and filter as the original's"; "spans at the top of the height range build as the original"; upstream, with "allocSpan: more spans than a pool holds take another pool, as upstream's" | benchmarked |
-| `rcRasterizeTriangle` | `rasterizeTriangle` | "fuzz: random triangles rasterize the same through every entry point"; "every rasterization entry point matches on crafted triangles"; "degenerate triangles build as the original"; upstream | benchmarked |
+| `rcRasterizeTriangle` | `rasterizeTriangle` | "fuzz: random triangles rasterize the same through every entry point"; "fuzz: triangles out to the vertex range rasterize as the original's, and past it fail"; "every rasterization entry point matches on crafted triangles"; "degenerate triangles build as the original"; "triangles with an x or z out of range fail, the same in every build"; "a field farther out than the vertex range fails instead of overrunning the clipper"; upstream | benchmarked |
 | `rcRasterizeTriangles`, `int` indices | `rasterizeTriangles(…, i32, …)` | as above; meshes; scenes | benchmarked |
 | `rcRasterizeTriangles`, `unsigned short` indices | `rasterizeTriangles(…, u16, …)` | as above | benchmarked |
 | `rcRasterizeTriangles`, unindexed | `rasterizeUnindexedTriangles` | as above | benchmarked |
@@ -157,19 +157,24 @@ Inputs a caller cannot validly pass are caller errors, which upstream
 leaves undefined: cells of size 0 or less, a width and height whose
 product overflows, triangle indices out of range, `addSpan` columns outside
 the field and the bounds of no vertices. The port does not promise the
-original's result on them; in Debug and ReleaseSafe it stops on the last
-four, with an integer overflow, an index out of bounds or an assertion.
+original's result on them. Rasterization refuses every triangle on cells
+of size 0 or less (`error.NonFiniteVertex`); in Debug and ReleaseSafe the
+port stops on the last four, with an integer overflow, an index out of
+bounds or an assertion.
 
 Upstream also writes past its buffers on some inputs a caller could pass.
 The tests keep the original away from them, and `doc/parity.md` says what
 the port does:
 
-- **Far triangles.** A triangle with an x or z coordinate that is not
-  finite, or beyond about 10¹⁰, can clip into more polygon vertices than
-  the rasterizer's buffers hold. The original corrupts its heap; the port
-  stops with an index out of bounds in safe builds and is undefined in
-  ReleaseFast. *For the author to decide:* keep this a caller error, or
-  have the port skip such triangles.
+- **Far triangles.** Where a cell is only a few float steps wide, rounding
+  while the rasterizer clips a triangle to the cells makes polygons of more
+  vertices than its buffers hold, and the original writes past them on its
+  stack. That starts at about 2^23.5 cells from the origin for a field that
+  far out, about 2^26.5 for triangles reaching that far over a field near
+  the origin, and with an x or z that is not finite. The port refuses, in
+  every build, a triangle with an x or z that is not finite or is
+  `vertex_cells_max` (2^22) cells or more from the origin: it logs it and
+  returns `error.NonFiniteVertex` before clipping it.
 - **Long rows.** A row with more sweeps than the field is wide (the
   heightfield layers), or than its longer side less one (the monotone and
   layer partitions), overruns the original's sweep buffer. The port's

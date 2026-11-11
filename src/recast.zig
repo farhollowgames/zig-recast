@@ -42,6 +42,7 @@ pub const LogCategory = context.LogCategory;
 pub const TimerLabel = context.TimerLabel;
 pub const max_timers = context.max_timers;
 
+pub const RasterizeError = rasterization.RasterizeError;
 pub const addSpan = rasterization.addSpan;
 pub const rasterizeTriangle = rasterization.rasterizeTriangle;
 pub const rasterizeTriangles = rasterization.rasterizeTriangles;
@@ -83,6 +84,11 @@ pub const span_height_bits = 13;
 pub const span_max_height: i32 = (1 << span_height_bits) - 1;
 /// The number of spans allocated together in a heightfield's pool.
 pub const spans_per_pool = 2048;
+/// How far from the origin, in cells, the x and z of a rasterized
+/// triangle's vertices must stay. Past it a cell is only a few float steps
+/// wide, and rounding while clipping a triangle to the cells can make
+/// polygons of more vertices than the clipping's buffers hold.
+pub const vertex_cells_max = 1 << 22;
 
 /// Marks a region id as a border region: it is not part of the navmesh.
 pub const border_reg: u16 = 0x8000;

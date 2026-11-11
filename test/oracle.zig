@@ -156,3 +156,47 @@ pub fn sameOutcome(logs: *Logs, step: []const u8, port_ok: bool, original_ok: bo
 pub fn succeeded(result: anytype) bool {
     return if (result) |_| true else |_| false;
 }
+
+/// Whether the port rasterizes a triangle with these corners on cells of
+/// size `cs`: each x and z finite and nearer the origin than
+/// `recast.vertex_cells_max` cells. Past that the original's clipper can
+/// write past its buffers, so the tests never give it such a triangle.
+pub fn inVertexRange(cs: f32, corners: []const [3]f32) bool {
+    const limit = cs * @as(f32, recast.vertex_cells_max);
+    for (corners) |v| {
+        if (!(@abs(v[0]) < limit) or !(@abs(v[2]) < limit)) return false;
+    }
+    return true;
+}
+
+/// Checks that the port's log is the original's with `line` before the
+/// original's last line, the timer's stop, then clears both: the port
+/// refused a triangle that the original was never given.
+pub fn expectSameWithRefusal(logs: *Logs, step: []const u8, line: []const u8) !void {
+    if (logs.recorder.failed) return error.OutOfMemory;
+    const original = upstream.logText(logs.original);
+    if (original.len == 0) return error.TestExpectedEqual;
+    const last = if (std.mem.findScalarLast(u8, original[0 .. original.len - 1], '\n')) |at|
+        at + 1
+    else
+        0;
+    const parts = [_][]const u8{ original[0..last], line, "\n", original[last..] };
+    const expected = try std.mem.concat(gpa, u8, &parts);
+    defer gpa.free(expected);
+    const actual = logs.recorder.text.items;
+    if (!std.mem.eql(u8, expected, actual)) {
+        std.debug.print(
+            "{s}: logs differ\n--- expected\n{s}--- port\n{s}---\n",
+            .{ step, expected, actual },
+        );
+        return error.TestExpectedEqual;
+    }
+    logs.recorder.text.clearRetainingCapacity();
+    upstream.shim_log_clear(logs.original);
+}
+
+/// The log line of a triangle the port refuses, in `function`.
+pub fn refusalLine(comptime function: []const u8) []const u8 {
+    return "L3 " ++ function ++ ": Triangle with an x or z that is not finite or too far " ++
+        "from the origin.";
+}

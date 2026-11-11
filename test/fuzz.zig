@@ -77,9 +77,9 @@ fn oddFloat(r: Random) f32 {
     return pick(r, f32, &odd);
 }
 
-/// A coordinate far outside the field. Much farther, or not finite, is
-/// outside what the original defines for x and z: rounding in its clipper
-/// then makes polygons of more vertices than its fixed buffers hold.
+/// A coordinate far outside the field, for x and z. Ones past the vertex
+/// range, where the original's clipper can overrun its buffers, have their
+/// own test.
 fn farFloat(r: Random) f32 {
     return pick(r, f32, &.{ 1e3, -1e3, 300, -300 });
 }
@@ -682,6 +682,228 @@ fn checkRasterization(seed: u64) !void {
         }
         _ = try oracle.sameOutcome(&logs, @tagName(entry), ok, original_ok);
         try oracle.expectSameDump(@tagName(entry), &hf, original_hf);
+    }
+}
+
+test "fuzz: triangles out to the vertex range rasterize as the original's, and past it fail" {
+    try fuzz("vertex range", 0x7a6, 1000, checkVertexRange);
+}
+
+/// A coordinate for a corner near `lo`..`hi`, or with `far` out to the edge
+/// of the vertex range, `limit`, but inside it.
+fn rangeCoordinate(r: Random, lo: f32, hi: f32, step: f32, far: bool, limit: f32) f32 {
+    const inside = std.math.nextAfter(f32, limit, 0);
+    if (!far) return std.math.clamp(between(r, lo - 4 * step, hi + 4 * step), -inside, inside);
+    return pick(r, f32, &.{ inside, -inside, between(r, -inside, inside) });
+}
+
+/// A field anywhere in the vertex range, out to its edge, with triangles
+/// over it and long ones out to the edge of the range, rasterized through
+/// every entry point by both sides; then the same with a triangle past the
+/// range among them, which the port refuses where it comes, keeping what
+/// the triangles before it made, as the original makes them.
+fn checkVertexRange(seed: u64) !void {
+    var prng: Random.DefaultPrng = .init(seed);
+    const r = prng.random();
+    var logs: oracle.Logs = try .init();
+    defer logs.deinit();
+    const ctx = logs.port();
+    const log = logs.original;
+
+    const cs = pick(r, f32, &.{ 0.05, 0.125, 0.3, 1, 4 });
+    const ch = pick(r, f32, &.{ 0.1, 0.2, 0.5 });
+    const limit = cs * @as(f32, recast.vertex_cells_max);
+    const width = r.intRangeAtMost(i32, 1, 16);
+    const height = r.intRangeAtMost(i32, 1, 16);
+    const size_x = @as(f32, @floatFromInt(width)) * cs;
+    const size_z = @as(f32, @floatFromInt(height)) * cs;
+    // The field's corner, from the origin out to the edge of the range.
+    const reach = limit * pick(r, f32, &.{ 0, 0.001, 0.25, 0.5, 0.99 });
+    const bmin: [3]f32 = .{
+        @min(between(r, -reach, reach), limit * 0.99 - size_x),
+        between(r, -10, 10),
+        @min(between(r, -reach, reach), limit * 0.99 - size_z),
+    };
+    const bmax: [3]f32 = .{ bmin[0] + size_x, bmin[1] + between(r, 1, 20), bmin[2] + size_z };
+
+    const nv = r.intRangeAtMost(usize, 3, 30);
+    const verts = try gpa.alloc(f32, nv * 3);
+    defer gpa.free(verts);
+    for (0..nv) |v| {
+        const far = chance(r, 0.15);
+        verts[v * 3 + 0] = rangeCoordinate(r, bmin[0], bmax[0], cs, far, limit);
+        verts[v * 3 + 1] = between(r, bmin[1] - 2, bmax[1] + 2);
+        verts[v * 3 + 2] = rangeCoordinate(r, bmin[2], bmax[2], cs, far, limit);
+    }
+    // One more vertex, past the range in x or z.
+    const bad = verts.len / 3;
+    const verts_bad = try gpa.alloc(f32, verts.len + 3);
+    defer gpa.free(verts_bad);
+    @memcpy(verts_bad[0..verts.len], verts);
+    const bad_value = pick(r, f32, &.{
+        std.math.nan(f32),
+        std.math.inf(f32),
+        -std.math.inf(f32),
+        limit,
+        -limit,
+        limit * 2,
+        1e30,
+    });
+    verts_bad[verts.len..][0..3].* = if (r.boolean())
+        .{ bad_value, bmin[1], bmin[2] }
+    else
+        .{ bmin[0], bmin[1], bad_value };
+
+    const nt = r.intRangeAtMost(usize, 1, 24);
+    const tris = try gpa.alloc(i32, nt * 3);
+    defer gpa.free(tris);
+    for (tris) |*t| t.* = r.intRangeLessThan(i32, 0, @intCast(nv));
+    const areas = try gpa.alloc(u8, nt);
+    defer gpa.free(areas);
+    for (areas) |*a| a.* = if (r.boolean()) recast.walkable_area else r.int(u8);
+    const merge = r.intRangeAtMost(i32, 0, 4);
+    // The refused triangle: one corner past the range.
+    const refused = r.uintLessThan(usize, nt);
+    const tris_bad = try gpa.dupe(i32, tris);
+    defer gpa.free(tris_bad);
+    tris_bad[refused * 3 + r.uintLessThan(usize, 3)] = @intCast(bad);
+
+    for ([_]bool{ false, true }) |with_bad| {
+        const corners = if (with_bad) verts_bad else verts;
+        const indices = if (with_bad) tris_bad else tris;
+        // The triangles the original is given: all, or those before the
+        // refused one.
+        const given = if (with_bad) refused else nt;
+        const indices_u16 = try gpa.alloc(u16, indices.len);
+        defer gpa.free(indices_u16);
+        for (indices_u16, indices) |*n, i| n.* = @intCast(i);
+        const flat = try gpa.alloc(f32, indices.len * 3);
+        defer gpa.free(flat);
+        for (indices, 0..) |v, i| {
+            flat[i * 3 ..][0..3].* = corners[@as(usize, @intCast(v)) * 3 ..][0..3].*;
+        }
+        const nv_c: c_int = @intCast(corners.len / 3);
+        const given_c: c_int = @intCast(given);
+        for ([_]Entry{ .int, .u16, .unindexed, .single }) |entry| {
+            var hf: recast.Heightfield = try .init(gpa, width, height, &bmin, &bmax, cs, ch);
+            defer hf.deinit(gpa);
+            const original_hf =
+                upstream.shim_hf_create(log, width, height, &bmin, &bmax, cs, ch) orelse
+                return error.OutOfMemory;
+            defer upstream.shim_hf_free(original_hf);
+            try logs.expectSame("create heightfield");
+            var result: recast.RasterizeError!void = {};
+            var original_ok = true;
+            switch (entry) {
+                .int => {
+                    result = recast.rasterizeTriangles(
+                        ctx,
+                        gpa,
+                        corners,
+                        i32,
+                        indices,
+                        areas,
+                        &hf,
+                        merge,
+                    );
+                    original_ok = upstream.shim_rasterize_triangles(
+                        log,
+                        corners.ptr,
+                        nv_c,
+                        indices.ptr,
+                        areas.ptr,
+                        given_c,
+                        original_hf,
+                        merge,
+                    ) != 0;
+                },
+                .u16 => {
+                    result = recast.rasterizeTriangles(
+                        ctx,
+                        gpa,
+                        corners,
+                        u16,
+                        indices_u16,
+                        areas,
+                        &hf,
+                        merge,
+                    );
+                    original_ok = upstream.shim_rasterize_triangles_u16(
+                        log,
+                        corners.ptr,
+                        nv_c,
+                        indices_u16.ptr,
+                        areas.ptr,
+                        given_c,
+                        original_hf,
+                        merge,
+                    ) != 0;
+                },
+                .unindexed => {
+                    result = recast.rasterizeUnindexedTriangles(
+                        ctx,
+                        gpa,
+                        flat,
+                        areas,
+                        &hf,
+                        merge,
+                    );
+                    original_ok = upstream.shim_rasterize_unindexed(
+                        log,
+                        flat.ptr,
+                        areas.ptr,
+                        given_c,
+                        original_hf,
+                        merge,
+                    ) != 0;
+                },
+                .single => for (areas, 0..) |area, i| {
+                    const v = flat[i * 9 ..][0..9];
+                    result = recast.rasterizeTriangle(
+                        ctx,
+                        gpa,
+                        v[0..3],
+                        v[3..6],
+                        v[6..9],
+                        area,
+                        &hf,
+                        merge,
+                    );
+                    if (i == given) break;
+                    original_ok = original_ok and upstream.shim_rasterize_triangle(
+                        log,
+                        v[0..3],
+                        v[3..6],
+                        v[6..9],
+                        area,
+                        original_hf,
+                        merge,
+                    ) != 0;
+                    try result;
+                },
+            }
+            try testing.expect(original_ok);
+            if (with_bad) {
+                try testing.expectError(error.NonFiniteVertex, result);
+                if (entry == .single) {
+                    // The refused call's timer, which the original was not
+                    // given.
+                    const timer = recast.TimerLabel.rasterize_triangles;
+                    const label: c_int = @intCast(@backingInt(timer));
+                    upstream.shim_log_timer(log, label, 1);
+                    upstream.shim_log_timer(log, label, 0);
+                }
+                const line = switch (entry) {
+                    .single => oracle.refusalLine("rcRasterizeTriangle"),
+                    else => oracle.refusalLine("rcRasterizeTriangles"),
+                };
+                try oracle.expectSameWithRefusal(&logs, @tagName(entry), line);
+            } else {
+                try result;
+                try logs.expectSame(@tagName(entry));
+            }
+            try oracle.expectSameDump(@tagName(entry), &hf, original_hf);
+        }
     }
 }
 

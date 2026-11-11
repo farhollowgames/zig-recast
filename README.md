@@ -115,8 +115,10 @@ every structure, every log message and every timer call. The inputs are:
 Both sides are built with fused multiply-add off, so float steps round as
 written. Where the original's behaviour is undefined (reading memory it
 never wrote, out-of-range float conversions), the port does what the
-original does on x86-64 with zeroed memory, the same on every machine; see
-[`doc/parity.md`](doc/parity.md). [`STATUS.md`](STATUS.md) lists every
+original does on x86-64 with zeroed memory, the same on every machine. A
+triangle with an x or z that is not finite, or 2^22 cells or more from the
+origin, where the original's clipping writes past its buffers, gives
+`error.NonFiniteVertex`; see [`doc/parity.md`](doc/parity.md). [`STATUS.md`](STATUS.md) lists every
 feature with its tests and its state.
 
 ## Performance

@@ -17,6 +17,29 @@ const SpanPool = recast.SpanPool;
 const clamp = recast.clamp;
 const truncateToInt = recast.truncateToInt;
 
+/// How rasterization can fail.
+pub const RasterizeError = Allocator.Error || error{
+    /// A triangle has an x or z that is not finite, or that is
+    /// `recast.vertex_cells_max` cells or more from the origin.
+    NonFiniteVertex,
+};
+
+/// Whether the x and z of the three vertices are finite and nearer the
+/// origin than `limit`.
+fn inRange(v0: *const [3]f32, v1: *const [3]f32, v2: *const [3]f32, limit: f32) bool {
+    const xz: @Vector(6, f32) = .{ v0[0], v0[2], v1[0], v1[2], v2[0], v2[2] };
+    return @reduce(.And, @abs(xz) < @as(@Vector(6, f32), @splat(limit)));
+}
+
+/// The bound `inRange` checks a heightfield's triangles against.
+fn vertexLimit(hf: *const Heightfield) f32 {
+    return hf.cs * recast.vertex_cells_max;
+}
+
+/// The log message of a triangle `inRange` rejects.
+const out_of_range_message = "Triangle with an x or z that is not finite or too far " ++
+    "from the origin.";
+
 /// Whether two bounding boxes overlap or touch.
 fn overlapBounds(
     a_min: *const [3]f32,
@@ -377,7 +400,9 @@ fn rasterizeTri(
 
 /// Rasterizes a triangle into the heightfield: each cell it covers gets a
 /// span from the triangle's lowest to its highest point over the cell,
-/// merged with the spans there as `addSpan` merges.
+/// merged with the spans there as `addSpan` merges. A triangle with an x or
+/// z that is not finite, or `recast.vertex_cells_max` cells or more from the
+/// origin, changes nothing and gives `error.NonFiniteVertex`.
 pub fn rasterizeTriangle(
     ctx: Context,
     gpa: Allocator,
@@ -387,10 +412,14 @@ pub fn rasterizeTriangle(
     area_id: u8,
     hf: *Heightfield,
     flag_merge_threshold: i32,
-) Allocator.Error!void {
+) RasterizeError!void {
     ctx.startTimer(.rasterize_triangles);
     defer ctx.stopTimer(.rasterize_triangles);
 
+    if (!inRange(v0, v1, v2, vertexLimit(hf))) {
+        ctx.log(.err, "rcRasterizeTriangle: " ++ out_of_range_message, .{});
+        return error.NonFiniteVertex;
+    }
     const inverse_cell_size = 1.0 / hf.cs;
     const inverse_cell_height = 1.0 / hf.ch;
     rasterizeTri(
@@ -415,6 +444,8 @@ pub fn rasterizeTriangle(
 /// Rasterizes indexed triangles, as `rasterizeTriangle` does each:
 /// `verts` holds x, y and z per vertex, `tris` three vertex indices per
 /// triangle (`i32` or `u16`) and `tri_area_ids` each triangle's area id.
+/// Stops with `error.NonFiniteVertex` at the first triangle that
+/// `rasterizeTriangle` would reject, keeping the spans of those before it.
 pub fn rasterizeTriangles(
     ctx: Context,
     gpa: Allocator,
@@ -424,7 +455,7 @@ pub fn rasterizeTriangles(
     tri_area_ids: []const u8,
     hf: *Heightfield,
     flag_merge_threshold: i32,
-) Allocator.Error!void {
+) RasterizeError!void {
     if (Index != i32 and Index != u16) {
         @compileError("rasterizeTriangles takes i32 or u16 vertex indices");
     }
@@ -435,11 +466,16 @@ pub fn rasterizeTriangles(
 
     const inverse_cell_size = 1.0 / hf.cs;
     const inverse_cell_height = 1.0 / hf.ch;
+    const limit = vertexLimit(hf);
     for (tri_area_ids, 0..) |area_id, tri_index| {
         const tri = tris[tri_index * 3 ..][0..3];
         const v0 = verts[@as(usize, @intCast(tri[0])) * 3 ..][0..3];
         const v1 = verts[@as(usize, @intCast(tri[1])) * 3 ..][0..3];
         const v2 = verts[@as(usize, @intCast(tri[2])) * 3 ..][0..3];
+        if (!inRange(v0, v1, v2, limit)) {
+            ctx.log(.err, "rcRasterizeTriangles: " ++ out_of_range_message, .{});
+            return error.NonFiniteVertex;
+        }
         rasterizeTri(
             gpa,
             v0,
@@ -462,7 +498,8 @@ pub fn rasterizeTriangles(
 
 /// Rasterizes triangles given by their vertices, as `rasterizeTriangle`
 /// does each: `verts` holds nine floats per triangle, x, y and z of each
-/// vertex, and `tri_area_ids` each triangle's area id.
+/// vertex, and `tri_area_ids` each triangle's area id. Stops with
+/// `error.NonFiniteVertex` as `rasterizeTriangles` does.
 pub fn rasterizeUnindexedTriangles(
     ctx: Context,
     gpa: Allocator,
@@ -470,7 +507,7 @@ pub fn rasterizeUnindexedTriangles(
     tri_area_ids: []const u8,
     hf: *Heightfield,
     flag_merge_threshold: i32,
-) Allocator.Error!void {
+) RasterizeError!void {
     assert(verts.len == tri_area_ids.len * 9);
 
     ctx.startTimer(.rasterize_triangles);
@@ -478,10 +515,15 @@ pub fn rasterizeUnindexedTriangles(
 
     const inverse_cell_size = 1.0 / hf.cs;
     const inverse_cell_height = 1.0 / hf.ch;
+    const limit = vertexLimit(hf);
     for (tri_area_ids, 0..) |area_id, tri_index| {
         const v0 = verts[(tri_index * 3 + 0) * 3 ..][0..3];
         const v1 = verts[(tri_index * 3 + 1) * 3 ..][0..3];
         const v2 = verts[(tri_index * 3 + 2) * 3 ..][0..3];
+        if (!inRange(v0, v1, v2, limit)) {
+            ctx.log(.err, "rcRasterizeTriangles: " ++ out_of_range_message, .{});
+            return error.NonFiniteVertex;
+        }
         rasterizeTri(
             gpa,
             v0,
@@ -538,4 +580,84 @@ test "a span's limits keep their low 13 bits" {
     try addSpan(.none, gpa, &hf, 0, 0, 100, 9000, 1, 1);
     try testing.expectEqual(100, hf.spans[0].?.smin);
     try testing.expectEqual(9000 - 8192, hf.spans[0].?.smax);
+}
+
+test "triangles with an x or z out of range fail, the same in every build" {
+    const gpa = testing.allocator;
+    const cs: f32 = 0.5;
+    const limit = cs * recast.vertex_cells_max;
+    const near_limit = std.math.nextAfter(f32, limit, 0);
+    var hf = try Heightfield.init(gpa, 4, 4, &.{ 0, 0, 0 }, &.{ 2, 4, 2 }, cs, 1);
+    defer hf.deinit(gpa);
+
+    // Each bad value in each corner's x and z. Heights take any float.
+    const nan = std.math.nan(f32);
+    const inf = std.math.inf(f32);
+    for ([_]f32{ nan, -nan, inf, -inf, limit, -limit, 1e30 }) |bad| {
+        for (0..9) |k| {
+            if (k % 3 == 1) continue;
+            var v = [9]f32{ 0.1, 1, 0.1, 0.1, 1, 1.9, 1.9, 1, 0.1 };
+            v[k] = bad;
+            const result = rasterizeTriangle(.none, gpa, v[0..3], v[3..6], v[6..9], 1, &hf, 1);
+            try testing.expectError(error.NonFiniteVertex, result);
+        }
+    }
+    for (hf.spans) |column| try testing.expectEqual(null, column);
+
+    // A long triangle from the field to just inside the range rasterizes,
+    // and so does one with odd heights.
+    const far = [9]f32{ near_limit, 1, 0.1, 0.1, 2, 1.9, -near_limit, 3, -near_limit };
+    try rasterizeTriangle(.none, gpa, far[0..3], far[3..6], far[6..9], 1, &hf, 1);
+    const odd = [9]f32{ 0.1, nan, 0.1, 0.1, inf, 1.9, 1.9, -inf, 0.1 };
+    try rasterizeTriangle(.none, gpa, odd[0..3], odd[3..6], odd[6..9], 1, &hf, 1);
+
+    // The batch entry points stop at the bad triangle, keeping the ones
+    // before it.
+    const verts = [_]f32{ 0.1, 1, 0.1, 0.1, 1, 1.9, 1.9, 1, 0.1, inf, 1, 0 };
+    const good_then_bad = [_]i32{ 0, 1, 2, 3, 1, 2 };
+    const good_then_bad_u16 = [_]u16{ 0, 1, 2, 3, 1, 2 };
+    const areas = [_]u8{ 1, 1 };
+    const flat = [_]f32{ 0.1, 1, 0.1, 0.1, 1, 1.9, 1.9, 1, 0.1, inf, 1, 0, 0, 1, 0, 1, 1, 1 };
+    for (0..3) |entry| {
+        var fresh = try Heightfield.init(gpa, 4, 4, &.{ 0, 0, 0 }, &.{ 2, 4, 2 }, cs, 1);
+        defer fresh.deinit(gpa);
+        const result = switch (entry) {
+            0 => rasterizeTriangles(.none, gpa, &verts, i32, &good_then_bad, &areas, &fresh, 1),
+            1 => rasterizeTriangles(.none, gpa, &verts, u16, &good_then_bad_u16, &areas, &fresh, 1),
+            else => rasterizeUnindexedTriangles(.none, gpa, &flat, &areas, &fresh, 1),
+        };
+        try testing.expectError(error.NonFiniteVertex, result);
+        try testing.expect(fresh.spans[0] != null);
+    }
+
+    // Cells of no size leave no range at all.
+    var no_size = try Heightfield.init(gpa, 1, 1, &.{ 0, 0, 0 }, &.{ 1, 1, 1 }, 0, 1);
+    defer no_size.deinit(gpa);
+    const tri = [9]f32{ 0, 0, 0, 0, 0, 1, 1, 0, 0 };
+    const result = rasterizeTriangle(.none, gpa, tri[0..3], tri[3..6], tri[6..9], 1, &no_size, 1);
+    try testing.expectError(error.NonFiniteVertex, result);
+}
+
+test "a field farther out than the vertex range fails instead of overrunning the clipper" {
+    // At 2^24 cells from the origin a cell is less than two float steps
+    // wide; the original's clipper then writes past its buffers.
+    const gpa = testing.allocator;
+    const cs: f32 = 0.125;
+    const base = cs * (1 << 24);
+    const bmin = [3]f32{ base, 0, base };
+    const bmax = [3]f32{ base + 16 * cs, 10, base + 16 * cs };
+    var hf = try Heightfield.init(gpa, 16, 16, &bmin, &bmax, cs, 0.2);
+    defer hf.deinit(gpa);
+    var prng: std.Random.DefaultPrng = .init(1);
+    const r = prng.random();
+    for (0..200) |_| {
+        var v: [9]f32 = undefined;
+        for (0..3) |i| {
+            v[i * 3 + 0] = base + r.float(f32) * 16 * cs + (r.float(f32) - 0.5) * 8 * cs;
+            v[i * 3 + 1] = r.float(f32) * 10;
+            v[i * 3 + 2] = base + r.float(f32) * 16 * cs + (r.float(f32) - 0.5) * 8 * cs;
+        }
+        const result = rasterizeTriangle(.none, gpa, v[0..3], v[3..6], v[6..9], 1, &hf, 1);
+        try testing.expectError(error.NonFiniteVertex, result);
+    }
 }

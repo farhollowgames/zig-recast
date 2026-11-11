@@ -126,12 +126,22 @@ upstream's own tests; `STATUS.md` lists the tests of every feature.
   allocated for), the port's buffer is large enough; the output is the
   same wherever the original's is defined. The tests skip those steps on
   both sides where the original would overrun.
-- **Far triangles.** A triangle with an x or z coordinate that is not
-  finite, or beyond about 10¹⁰, can clip into more polygon vertices than
-  the rasterizer's buffers hold, and the original corrupts its heap. The
-  port stops with an index out of bounds in safe builds and is undefined in
-  ReleaseFast. The tests keep x and z finite and within 10³ of the field;
-  heights take any float.
+- **Far triangles.** Where a cell is only a few float steps wide, rounding
+  while the rasterizer clips a triangle to the cells makes polygons of more
+  vertices than its buffers hold. The original then writes past its
+  clipping buffer on the stack (AddressSanitizer reports a
+  stack-buffer-overflow in `rasterizeTri`), which corrupts its memory and
+  can go on to corrupt its heap. That starts at about 2^23.5 cells from the
+  origin for a field that far out (about 1,500 km at 125 mm cells), at
+  about 2^26.5 cells for triangles reaching that far over a field near the
+  origin, and with an x or z that is not finite. The port refuses, in every
+  build, a triangle with an x or z that is not finite or is
+  `recast.vertex_cells_max` (2^22) cells or more from the origin: it logs
+  the refusal and returns `error.NonFiniteVertex` before clipping the
+  triangle, and the triangles before it keep their spans. The tests give
+  the original only triangles inside that range, compare the two out to
+  its edge, and check the refusal on every entry point; heights take any
+  float.
 - **A detail sample distance of 0 or less.** `rcBuildPolyMeshDetail` never
   finishes in the original there (its hull stays empty and
   `triangulateHull` loops forever). The port triangulates the polygon's own

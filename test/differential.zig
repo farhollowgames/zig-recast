@@ -945,6 +945,17 @@ test "every rasterization entry point matches on crafted triangles" {
                     &hf,
                     merge,
                 );
+                if (!oracle.inVertexRange(hf.cs, &tri)) {
+                    // The original's step would be its timer alone.
+                    try testing.expectError(error.NonFiniteVertex, ok);
+                    const timer = recast.TimerLabel.rasterize_triangles;
+                    const label: c_int = @intCast(@backingInt(timer));
+                    upstream.shim_log_timer(logs.original, label, 1);
+                    upstream.shim_log_timer(logs.original, label, 0);
+                    const line = oracle.refusalLine("rcRasterizeTriangle");
+                    try oracle.expectSameWithRefusal(&logs, "triangle", line);
+                    continue;
+                }
                 const original_ok = upstream.shim_rasterize_triangle(
                     logs.original,
                     &tri[0],
