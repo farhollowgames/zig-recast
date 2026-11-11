@@ -15,8 +15,12 @@ tests and the benchmark only), from `Recast.h`, `RecastAlloc.h` and
 - **reviewed**: a reviewer that did not write the port has tried to break
   it.
 
-Nothing is reviewed yet. Every feature below is at least oracle-tested,
-except the allocation functions, which have no output to compare.
+A performance pass and a skeptic's review by an agent that did not write
+the port have gone over every feature below; the rows become reviewed once
+the author has read their findings. Every feature is at least
+oracle-tested, except the allocation functions, which have no output to
+compare; a test fails each allocation of a whole build in turn and checks
+that nothing leaks.
 
 ## The tests
 
@@ -34,7 +38,8 @@ between. The named tests are in `test/`; these sets run many of them:
   triangles, added spans, filters, area marks, partitions, settings and
   tiles, every eighth built twice by the port (`fuzz.zig`).
 - **edges**: hand-made cases through the whole build: empty, one triangle,
-  one span, the limit of every counter, degenerate triangles (`edges.zig`).
+  one span, borders as wide as the field, tiles off the cell grid, the
+  limit of every counter, degenerate triangles (`edges.zig`).
 - **upstream**: upstream's own `Tests/Recast` cases, section by section,
   run on both sides (`upstream_tests.zig`).
 
@@ -59,7 +64,7 @@ original builds them" builds a tiled navmesh on 1, 2 and 8 threads.
 | `rcCompactCell`, `rcCompactSpan`, `rcCompactHeightfield` | `CompactCell`, `CompactSpan`, `CompactHeightfield` | every compact heightfield compared | oracle-tested |
 | `rcHeightfieldLayer`, `rcHeightfieldLayerSet` | `HeightfieldLayer`, `HeightfieldLayerSet` | every layer set compared | oracle-tested |
 | `rcContour`, `rcContourSet`, `rcPolyMesh`, `rcPolyMeshDetail` | `Contour`, `ContourSet`, `PolyMesh`, `PolyMeshDetail` | every contour set and mesh compared | oracle-tested |
-| `rcAllocHeightfield`, `rcFreeHeightField`, `rcAllocCompactHeightfield`, `rcFreeCompactHeightfield`, `rcAllocHeightfieldLayerSet`, `rcFreeHeightfieldLayerSet`, `rcAllocContourSet`, `rcFreeContourSet`, `rcAllocPolyMesh`, `rcFreePolyMesh`, `rcAllocPolyMeshDetail`, `rcFreePolyMeshDetail` | the functions that build a structure return it, and its `deinit` frees it | every test runs on `std.testing.allocator`, which fails on leaks and double frees | ported |
+| `rcAllocHeightfield`, `rcFreeHeightField`, `rcAllocCompactHeightfield`, `rcFreeCompactHeightfield`, `rcAllocHeightfieldLayerSet`, `rcFreeHeightfieldLayerSet`, `rcAllocContourSet`, `rcFreeContourSet`, `rcAllocPolyMesh`, `rcFreePolyMesh`, `rcAllocPolyMeshDetail`, `rcFreePolyMeshDetail` | the functions that build a structure return it, and its `deinit` frees it | every test runs on `std.testing.allocator`, which fails on leaks and double frees; "a failed allocation fails each step of a build and leaks nothing" | ported |
 | `rcCreateHeightfield` | `Heightfield.init` | upstream; meshes; scenes | benchmarked |
 | `rcCalcBounds`, `rcCalcGridSize` | `calcBounds`, `calcGridSize` | "fuzz: bounds and grid sizes match, with odd floats"; upstream; scenes | benchmarked |
 | `rcMarkWalkableTriangles`, `rcClearUnwalkableTriangles` | `markWalkableTriangles`, `clearUnwalkableTriangles` | "fuzz: triangles are marked and cleared the same at any slope"; "walkable triangles match at every slope"; "slope thresholds are cosines correctly rounded, as the original's linked cosf gives"; upstream | benchmarked |
@@ -207,5 +212,6 @@ the port does:
 
 ## Next
 
-1. A performance pass by a fresh agent, against the README's tables.
-2. A skeptic's review, then fixes, then a release.
+1. The author's decisions: the left-out list above, and what the port does
+   with polygons of more than 127 vertices.
+2. The benchmark rerun on a quiet machine, then a release.
