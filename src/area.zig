@@ -337,25 +337,29 @@ pub fn markBoxArea(
     if (min_z < 0) min_z = 0;
     if (max_z >= z_size) max_z = z_size - 1;
 
-    // Mark relevant cells.
+    // Mark relevant cells. The field is read through local slices: through
+    // `chf`, every store to an area would load them again.
+    const cells = chf.cells;
+    const spans = chf.spans;
+    const areas = chf.areas;
     var z = min_z;
     while (z <= max_z) : (z += 1) {
         var x = min_x;
         while (x <= max_x) : (x += 1) {
-            const cell = chf.cells[@intCast(x + z * z_stride)];
+            const cell = cells[@intCast(x + z * z_stride)];
             const max_span_index = @as(i32, cell.index) + cell.count;
             var span_index: i32 = cell.index;
             while (span_index < max_span_index) : (span_index += 1) {
-                const span = chf.spans[@intCast(span_index)];
+                const span = spans[@intCast(span_index)];
 
                 // Skip if the span is outside the box extents.
                 if (@as(i32, span.y) < min_y or @as(i32, span.y) > max_y) continue;
 
                 // Skip if the span has been removed.
-                if (chf.areas[@intCast(span_index)] == null_area) continue;
+                if (areas[@intCast(span_index)] == null_area) continue;
 
                 // Mark the span.
-                chf.areas[@intCast(span_index)] = area_id;
+                areas[@intCast(span_index)] = area_id;
             }
         }
     }
@@ -604,15 +608,22 @@ pub fn markCylinderArea(
 
     const radius_sq = radius * radius;
 
+    // The field is read through locals: through `chf`, every store to an
+    // area would load them again.
+    const cells = chf.cells;
+    const spans = chf.spans;
+    const areas = chf.areas;
+    const bmin = chf.bmin;
+    const cs = chf.cs;
     var z = min_z;
     while (z <= max_z) : (z += 1) {
         var x = min_x;
         while (x <= max_x) : (x += 1) {
-            const cell = chf.cells[@intCast(x + z * z_stride)];
+            const cell = cells[@intCast(x + z * z_stride)];
             const max_span_index = @as(i32, cell.index) + cell.count;
 
-            const cell_x = chf.bmin[0] + (@as(f32, @floatFromInt(x)) + 0.5) * chf.cs;
-            const cell_z = chf.bmin[2] + (@as(f32, @floatFromInt(z)) + 0.5) * chf.cs;
+            const cell_x = bmin[0] + (@as(f32, @floatFromInt(x)) + 0.5) * cs;
+            const cell_z = bmin[2] + (@as(f32, @floatFromInt(z)) + 0.5) * cs;
             const delta_x = cell_x - position[0];
             const delta_z = cell_z - position[2];
 
@@ -622,14 +633,14 @@ pub fn markCylinderArea(
             // Mark all overlapping spans.
             var span_index: i32 = cell.index;
             while (span_index < max_span_index) : (span_index += 1) {
-                const span = chf.spans[@intCast(span_index)];
+                const span = spans[@intCast(span_index)];
 
                 // Skip if span is removed.
-                if (chf.areas[@intCast(span_index)] == null_area) continue;
+                if (areas[@intCast(span_index)] == null_area) continue;
 
                 // Mark if y extents overlap.
                 if (@as(i32, span.y) >= min_y and @as(i32, span.y) <= max_y) {
-                    chf.areas[@intCast(span_index)] = area_id;
+                    areas[@intCast(span_index)] = area_id;
                 }
             }
         }
