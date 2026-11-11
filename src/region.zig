@@ -1022,10 +1022,11 @@ fn mergeAndFilterLayerRegions(
                 const reg = &regions[ri];
 
                 reg.span_count += 1;
-                reg.area_type = area;
-
                 reg.ymin = @min(reg.ymin, s.y);
                 reg.ymax = @max(reg.ymax, s.y);
+                // After the bounds: the compiler may read `ymax` with a wider
+                // load over `area_type`, which would wait for this store.
+                reg.area_type = area;
 
                 // Collect all region layers.
                 try lregs.append(gpa, ri);
