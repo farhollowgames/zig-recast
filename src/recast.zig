@@ -729,8 +729,8 @@ pub fn buildCompactHeightfield(
     for (hf.spans, cells) |column, *cell| {
         // A column with no spans keeps index 0 and count 0.
         var span = column orelse continue;
-        cell.index = @truncate(current_cell_index);
-        cell.count = 0;
+        const first = current_cell_index;
+        var count: u8 = 0;
         while (true) {
             if (span.area != null_area) {
                 const bot: i32 = span.smax;
@@ -739,59 +739,58 @@ pub fn buildCompactHeightfield(
                 spans[current_cell_index].h = @intCast(clamp(i32, top - bot, 0, 0xff));
                 areas[current_cell_index] = span.area;
                 current_cell_index += 1;
-                cell.count +%= 1;
+                count +%= 1;
             }
             span = span.next orelse break;
         }
+        cell.* = .{ .index = @truncate(first), .count = count };
     }
 
     // Find neighbour connections.
     const max_layers = not_connected - 1;
     var max_layer_index: i32 = 0;
-    const z_stride = x_size;
-    var z: i32 = 0;
-    while (z < z_size) : (z += 1) {
-        var x: i32 = 0;
-        while (x < x_size) : (x += 1) {
-            const cell = cells[@intCast(x + z * z_stride)];
-            const first: u32 = cell.index;
-            for (spans[first .. first + cell.count]) |*span| {
-                for ([4]u2{ 0, 1, 2, 3 }) |dir| {
-                    setCon(span, dir, not_connected);
-                    const neighbor_x = x + getDirOffsetX(dir);
-                    const neighbor_z = z + getDirOffsetY(dir);
+    const width: usize = @intCast(x_size);
+    for (0..@intCast(z_size)) |z| {
+        for (0..width) |x| {
+            const cell = cells[x + z * width];
+            for (spans[cell.index..][0..cell.count]) |*span| {
+                const y: i32 = span.y;
+                const y_top = y + span.h;
+                // Not connected in every direction, until a neighbour is.
+                var con: u24 = 0xffffff;
+                inline for (0..4) |dir| {
+                    const shift = dir * 6;
+                    const neighbor_x = @as(i32, @intCast(x)) + comptime getDirOffsetX(dir);
+                    const neighbor_z = @as(i32, @intCast(z)) + comptime getDirOffsetY(dir);
                     // First check that the neighbour cell is in bounds.
-                    if (neighbor_x < 0 or neighbor_z < 0 or
-                        neighbor_x >= x_size or neighbor_z >= z_size)
+                    if (neighbor_x >= 0 and neighbor_z >= 0 and
+                        neighbor_x < x_size and neighbor_z < z_size)
                     {
-                        continue;
-                    }
-                    // Find the first neighbour span reachable from this one.
-                    const neighbor_cell = cells[@intCast(neighbor_x + neighbor_z * z_stride)];
-                    const neighbor_first: i32 = neighbor_cell.index;
-                    const neighbor_end = neighbor_first + neighbor_cell.count;
-                    var k = neighbor_first;
-                    while (k < neighbor_end) : (k += 1) {
-                        const neighbor_span = spans[@intCast(k)];
-                        const bot: i32 = @max(span.y, neighbor_span.y);
-                        const top: i32 = @min(
-                            @as(i32, span.y) + span.h,
-                            @as(i32, neighbor_span.y) + neighbor_span.h,
-                        );
-                        // The gap must be tall enough and the climb low
-                        // enough.
-                        const climb = @as(i32, neighbor_span.y) - @as(i32, span.y);
-                        if (top - bot >= walkable_height and @abs(climb) <= walkable_climb) {
-                            const layer_index = k - neighbor_first;
-                            if (layer_index < 0 or layer_index > max_layers) {
-                                max_layer_index = @max(max_layer_index, layer_index);
-                                continue;
+                        // Find the first neighbour span reachable from
+                        // this one.
+                        const neighbor_cell = cells[@intCast(neighbor_x + neighbor_z * x_size)];
+                        const column = spans[neighbor_cell.index..][0..neighbor_cell.count];
+                        for (column, 0..) |neighbor_span, layer_index| {
+                            const neighbor_y: i32 = neighbor_span.y;
+                            const bot = @max(y, neighbor_y);
+                            const top = @min(y_top, neighbor_y + neighbor_span.h);
+                            // The gap must be tall enough and the climb
+                            // low enough.
+                            const climb = neighbor_y - y;
+                            if (top - bot >= walkable_height and @abs(climb) <= walkable_climb) {
+                                if (layer_index > max_layers) {
+                                    const index: i32 = @intCast(layer_index);
+                                    max_layer_index = @max(max_layer_index, index);
+                                    continue;
+                                }
+                                const index: u24 = @intCast(layer_index);
+                                con = (con & ~(@as(u24, 0x3f) << shift)) | (index << shift);
+                                break;
                             }
-                            setCon(span, dir, layer_index);
-                            break;
                         }
                     }
                 }
+                span.con = con;
             }
         }
     }
