@@ -239,6 +239,21 @@ pub extern fn shim_polymesh_copy(log: *Log, src: *PolyMesh) ?*PolyMesh;
 pub extern fn shim_polymesh_free(pmesh: *PolyMesh) void;
 pub extern fn shim_polymesh_count(pmesh: *PolyMesh) c_int;
 pub extern fn shim_polymesh_set_flags(pmesh: *PolyMesh, flags: [*]const u16) void;
+pub extern fn shim_polymesh_create(
+    verts: [*]const u16,
+    nverts: c_int,
+    polys: [*]const u16,
+    regs: [*]const u16,
+    areas: [*]const u8,
+    npolys: c_int,
+    nvp: c_int,
+    bmin: *const [3]f32,
+    bmax: *const [3]f32,
+    cs: f32,
+    ch: f32,
+    border_size: c_int,
+    max_edge_error: f32,
+) ?*PolyMesh;
 pub extern fn shim_detail_build(
     log: *Log,
     pmesh: *PolyMesh,

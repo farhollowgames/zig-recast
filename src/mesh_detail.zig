@@ -16,6 +16,12 @@ const CompactHeightfield = recast.CompactHeightfield;
 const PolyMesh = recast.PolyMesh;
 const PolyMeshDetail = recast.PolyMeshDetail;
 
+pub const BuildPolyMeshDetailError = Allocator.Error || error{
+    /// A polygon has more vertices than a detail mesh holds,
+    /// `max_detail_verts`.
+    TooManyPolygonVertices,
+};
+
 const unset_height: u16 = 0xffff;
 const flt_max = std.math.floatMax(f32);
 
@@ -1348,7 +1354,9 @@ fn lowByte(value: i32) u8 {
 /// `chf`: samples `sample_dist` apart (0 for none, only the polygons' own
 /// vertices) are added where the surface strays more than
 /// `sample_max_error` from the triangles. An empty poly mesh gives an
-/// empty detail mesh.
+/// empty detail mesh. A polygon of more than 127 vertices, which a poly
+/// mesh with an `nvp` past 127 can hold, gives
+/// `error.TooManyPolygonVertices` before any work.
 pub fn buildPolyMeshDetail(
     ctx: Context,
     gpa: Allocator,
@@ -1356,7 +1364,7 @@ pub fn buildPolyMeshDetail(
     chf: *const CompactHeightfield,
     sample_dist: f32,
     sample_max_error: f32,
-) Allocator.Error!PolyMeshDetail {
+) BuildPolyMeshDetailError!PolyMeshDetail {
     ctx.startTimer(.build_polymeshdetail);
     defer ctx.stopTimer(.build_polymeshdetail);
 
@@ -1364,6 +1372,20 @@ pub fn buildPolyMeshDetail(
 
     const nvp: usize = @intCast(pmesh.nvp);
     const npolys: usize = @intCast(pmesh.npolys);
+    if (nvp > max_detail_verts) {
+        for (0..npolys) |i| {
+            const p = pmesh.polys[i * nvp * 2 ..][0..nvp];
+            const n = std.mem.findScalar(u16, p, recast.mesh_null_idx) orelse nvp;
+            if (n <= max_detail_verts) continue;
+            ctx.log(
+                .err,
+                "rcBuildPolyMeshDetail: Polygon {d} has {d} vertices, more than the {d} a " ++
+                    "detail mesh holds.",
+                .{ i, n, max_detail_verts },
+            );
+            return error.TooManyPolygonVertices;
+        }
+    }
     const cs = pmesh.cs;
     const ch = pmesh.ch;
     const orig = &pmesh.bmin;

@@ -478,6 +478,42 @@ void shim_polymesh_set_flags(void* pmesh_ptr, const unsigned short* flags) {
     for (int i = 0; i < pmesh->npolys; ++i) pmesh->flags[i] = flags[i];
 }
 
+// A poly mesh filled by hand from the caller's arrays: `polys` holds
+// `npolys * nvp * 2` entries, `regs` and `areas` one a polygon; the flags are 0.
+void* shim_polymesh_create(const unsigned short* verts, int nverts, const unsigned short* polys,
+                           const unsigned short* regs, const unsigned char* areas, int npolys,
+                           int nvp, const float* bmin, const float* bmax, float cs, float ch,
+                           int border_size, float max_edge_error) {
+    rcPolyMesh* pmesh = rcAllocPolyMesh();
+    if (!pmesh) return 0;
+    const size_t nindices = (size_t)npolys * nvp * 2;
+    pmesh->verts = (unsigned short*)rcAlloc(sizeof(unsigned short) * nverts * 3, RC_ALLOC_PERM);
+    pmesh->polys = (unsigned short*)rcAlloc(sizeof(unsigned short) * nindices, RC_ALLOC_PERM);
+    pmesh->regs = (unsigned short*)rcAlloc(sizeof(unsigned short) * npolys, RC_ALLOC_PERM);
+    pmesh->flags = (unsigned short*)rcAlloc(sizeof(unsigned short) * npolys, RC_ALLOC_PERM);
+    pmesh->areas = (unsigned char*)rcAlloc(sizeof(unsigned char) * npolys, RC_ALLOC_PERM);
+    if (!pmesh->verts || !pmesh->polys || !pmesh->regs || !pmesh->flags || !pmesh->areas) {
+        rcFreePolyMesh(pmesh);
+        return 0;
+    }
+    memcpy(pmesh->verts, verts, sizeof(unsigned short) * nverts * 3);
+    memcpy(pmesh->polys, polys, sizeof(unsigned short) * nindices);
+    memcpy(pmesh->regs, regs, sizeof(unsigned short) * npolys);
+    memset(pmesh->flags, 0, sizeof(unsigned short) * npolys);
+    memcpy(pmesh->areas, areas, (size_t)npolys);
+    pmesh->nverts = nverts;
+    pmesh->npolys = npolys;
+    pmesh->maxpolys = npolys;
+    pmesh->nvp = nvp;
+    rcVcopy(pmesh->bmin, bmin);
+    rcVcopy(pmesh->bmax, bmax);
+    pmesh->cs = cs;
+    pmesh->ch = ch;
+    pmesh->borderSize = border_size;
+    pmesh->maxEdgeError = max_edge_error;
+    return pmesh;
+}
+
 void* shim_detail_build(void* ctx, void* pmesh, void* chf, float sample_dist,
                         float sample_max_error) {
     rcPolyMeshDetail* dmesh = rcAllocPolyMeshDetail();

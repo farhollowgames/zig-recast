@@ -865,6 +865,137 @@ test "detail meshes match for every sample distance and error" {
     try testing.expectEqual(127, most_verts);
 }
 
+test "polygons of up to 127 vertices build their detail as the original, and larger ones fail" {
+    // The original holds a polygon's hull in 127 entries and writes past
+    // them for a polygon with more, so it is never given one.
+    var mesh = try meshes.vale(gpa, 32);
+    defer mesh.deinit(gpa);
+    var compact = try buildCompact(&mesh, .{});
+    defer compact.deinit();
+    const logs = &compact.logs;
+    const ctx = logs.port();
+    const chf = &compact.chf;
+    const original_chf = compact.original;
+    try recast.buildDistanceField(ctx, gpa, chf);
+    try testing.expect(upstream.shim_distance_field(logs.original, original_chf) != 0);
+    try recast.buildRegions(ctx, gpa, chf, 0, 64, 400);
+    try testing.expect(upstream.shim_regions(logs.original, original_chf, 0, 64, 400) != 0);
+    try logs.expectSame("regions");
+
+    var round: RoundPolygon = .{};
+    for ([_]usize{ 125, 126, 127 }) |n| {
+        round.init(chf, n);
+        const pmesh = round.mesh(chf, n);
+        var dmesh = try recast.buildPolyMeshDetail(ctx, gpa, &pmesh, chf, 1.8, 0.2);
+        defer dmesh.deinit(gpa);
+        const original_pmesh = upstream.shim_polymesh_create(
+            &round.verts,
+            @intCast(n),
+            &round.polys,
+            &round.regs,
+            &round.areas,
+            1,
+            RoundPolygon.nvp,
+            &chf.bmin,
+            &chf.bmax,
+            chf.cs,
+            chf.ch,
+            0,
+            pmesh.max_edge_error,
+        ) orelse return error.OutOfMemory;
+        defer upstream.shim_polymesh_free(original_pmesh);
+        const original_dmesh = upstream.shim_detail_build(
+            logs.original,
+            original_pmesh,
+            original_chf,
+            1.8,
+            0.2,
+        ) orelse return error.TestUnexpectedResult;
+        defer upstream.shim_detail_free(original_dmesh);
+        try logs.expectSame("detail");
+        try expectSameDump("detail", &dmesh, original_dmesh);
+        try testing.expectEqual(127, dmesh.meshes[1]);
+    }
+
+    const label = @backingInt(recast.TimerLabel.build_polymeshdetail);
+    for ([_]usize{ 128, 200 }) |n| {
+        round.init(chf, n);
+        const pmesh = round.mesh(chf, n);
+        for ([_]f32{ 0, 1.8 }) |sample_dist| {
+            var recorder: Recorder = .{};
+            defer recorder.text.deinit(gpa);
+            try testing.expectError(
+                error.TooManyPolygonVertices,
+                recast.buildPolyMeshDetail(recorder.context(), gpa, &pmesh, chf, sample_dist, 0.2),
+            );
+            const expected = try std.fmt.allocPrint(
+                gpa,
+                "S{d}\nL3 rcBuildPolyMeshDetail: Polygon 0 has {d} vertices, more than " ++
+                    "the 127 a detail mesh holds.\nE{d}\n",
+                .{ label, n, label },
+            );
+            defer gpa.free(expected);
+            try testing.expectEqualStrings(expected, recorder.text.items);
+        }
+    }
+}
+
+/// A poly mesh of one polygon around a circle over the middle of a compact
+/// heightfield, with room for `nvp` vertices.
+const RoundPolygon = struct {
+    const nvp = 200;
+
+    verts: [nvp * 3]u16 = @splat(0),
+    polys: [nvp * 2]u16 = @splat(recast.mesh_null_idx),
+    regs: [1]u16 = .{0},
+    flags: [1]u16 = .{0},
+    areas: [1]u8 = .{recast.walkable_area},
+
+    /// Places `n` vertices around the circle, each at the height of the
+    /// span under it, in the region of the middle span.
+    fn init(round: *RoundPolygon, chf: *const recast.CompactHeightfield, n: usize) void {
+        const cx = @divTrunc(chf.width, 2);
+        const cz = @divTrunc(chf.height, 2);
+        const radius: f64 = @floatFromInt(@min(cx, cz) - 8);
+        round.polys = @splat(recast.mesh_null_idx);
+        for (0..n) |i| {
+            const angle = 2 * std.math.pi * @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(n));
+            const x = cx + @as(i32, @intFromFloat(@round(radius * @cos(angle))));
+            const z = cz - @as(i32, @intFromFloat(@round(radius * @sin(angle))));
+            const y = if (topSpan(chf, x, z)) |span| span.y else 0;
+            round.verts[i * 3 ..][0..3].* = .{ @intCast(x), y, @intCast(z) };
+            round.polys[i] = @intCast(i);
+        }
+        round.regs[0] = if (topSpan(chf, cx, cz)) |span| span.reg else 0;
+    }
+
+    fn mesh(round: *RoundPolygon, chf: *const recast.CompactHeightfield, n: usize) recast.PolyMesh {
+        return .{
+            .verts = round.verts[0 .. n * 3],
+            .polys = &round.polys,
+            .regs = &round.regs,
+            .flags = &round.flags,
+            .areas = &round.areas,
+            .nverts = @intCast(n),
+            .npolys = 1,
+            .maxpolys = 1,
+            .nvp = nvp,
+            .bmin = chf.bmin,
+            .bmax = chf.bmax,
+            .cs = chf.cs,
+            .ch = chf.ch,
+            .border_size = 0,
+            .max_edge_error = 1.3,
+        };
+    }
+
+    fn topSpan(chf: *const recast.CompactHeightfield, x: i32, z: i32) ?recast.CompactSpan {
+        const cell = chf.cells[@intCast(x + z * chf.width)];
+        if (cell.count == 0) return null;
+        return chf.spans[cell.index + cell.count - 1];
+    }
+};
+
 test "walkable triangles match at every slope" {
     for (all_sources) |source| {
         var mesh = try loadMesh(source);
