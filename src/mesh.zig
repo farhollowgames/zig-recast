@@ -454,13 +454,12 @@ fn getPolyMergeValue(pa: []const u16, pb: []const u16, verts: []const u16, nvp: 
     var eb: ?usize = null;
 
     for (0..na) |i| {
-        var va0 = pa[i];
-        var va1 = pa[(i + 1) % na];
-        if (va0 > va1) std.mem.swap(u16, &va0, &va1);
+        // Each edge with its lower vertex first.
+        const va0 = @min(pa[i], pa[(i + 1) % na]);
+        const va1 = @max(pa[i], pa[(i + 1) % na]);
         for (0..nb) |j| {
-            var vb0 = pb[j];
-            var vb1 = pb[(j + 1) % nb];
-            if (vb0 > vb1) std.mem.swap(u16, &vb0, &vb1);
+            const vb0 = @min(pb[j], pb[(j + 1) % nb]);
+            const vb1 = @max(pb[j], pb[(j + 1) % nb]);
             if (va0 == vb0 and va1 == vb1) {
                 ea = i;
                 eb = j;
