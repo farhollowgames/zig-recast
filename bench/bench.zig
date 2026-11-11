@@ -10,7 +10,7 @@ const recast = @import("recast");
 const upstream = @import("upstream");
 const meshes = @import("meshes");
 
-const Step = enum {
+const Step = enum(u8) {
     rasterize,
     filters,
     compact,
@@ -22,7 +22,7 @@ const Step = enum {
     detail,
 };
 
-const step_count = @typeInfo(Step).@"enum".fields.len;
+const step_count = @typeInfo(Step).@"enum".field_names.len;
 
 /// Nanoseconds per step.
 const Times = [step_count]u64;

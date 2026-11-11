@@ -51,7 +51,7 @@ pub const TimerLabel = enum(u32) {
 };
 
 /// The number of timer labels.
-pub const max_timers = @typeInfo(TimerLabel).@"enum".fields.len;
+pub const max_timers = @typeInfo(TimerLabel).@"enum".field_names.len;
 
 /// The longest message `log` passes on; longer ones are cut to this length,
 /// after an error saying so.
@@ -221,4 +221,5 @@ test "disabled logging and timers report nothing" {
     ctx.enableTimer(true);
     try testing.expectEqual(25, ctx.accumulatedTime(.build_layers));
     try testing.expectEqual(-1, Context.none.accumulatedTime(.total));
+    try testing.expectEqual(28, max_timers);
 }
