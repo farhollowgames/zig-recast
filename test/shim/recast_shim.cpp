@@ -79,7 +79,8 @@ protected:
         text.appendInt((int)label);
         text.append("\n", 1);
     }
-    int doGetAccumulatedTime(const rcTimerLabel) const override { return -1; }
+    // A time that tells the labels apart.
+    int doGetAccumulatedTime(const rcTimerLabel label) const override { return (int)label * 3 + 1; }
 };
 
 typedef void (*Write)(void* user, const void* bytes, size_t len);
@@ -134,6 +135,94 @@ void shim_log_reset(void* ctx) {
     ((rcContext*)ctx)->resetTimers();
 }
 
+void shim_log_timer(void* ctx, int label, int start) {
+    if (start) {
+        ((rcContext*)ctx)->startTimer((rcTimerLabel)label);
+    } else {
+        ((rcContext*)ctx)->stopTimer((rcTimerLabel)label);
+    }
+}
+
+int shim_log_accumulated(void* ctx, int label) {
+    return ((rcContext*)ctx)->getAccumulatedTime((rcTimerLabel)label);
+}
+
+// The accumulated time of rcContext itself, which records nothing.
+int shim_default_accumulated(int label, int timer) {
+    rcContext ctx;
+    ctx.enableTimer(timer != 0);
+    return ctx.getAccumulatedTime((rcTimerLabel)label);
+}
+
+int shim_max_timers(void) { return RC_MAX_TIMERS; }
+
+// A timer label's name, or "" for a value that is not one.
+const char* shim_timer_label_name(int label) {
+    switch ((rcTimerLabel)label) {
+#define NAME(x) \
+    case x: return #x;
+        NAME(RC_TIMER_TOTAL)
+        NAME(RC_TIMER_TEMP)
+        NAME(RC_TIMER_RASTERIZE_TRIANGLES)
+        NAME(RC_TIMER_BUILD_COMPACTHEIGHTFIELD)
+        NAME(RC_TIMER_BUILD_CONTOURS)
+        NAME(RC_TIMER_BUILD_CONTOURS_TRACE)
+        NAME(RC_TIMER_BUILD_CONTOURS_SIMPLIFY)
+        NAME(RC_TIMER_FILTER_BORDER)
+        NAME(RC_TIMER_FILTER_WALKABLE)
+        NAME(RC_TIMER_MEDIAN_AREA)
+        NAME(RC_TIMER_FILTER_LOW_OBSTACLES)
+        NAME(RC_TIMER_BUILD_POLYMESH)
+        NAME(RC_TIMER_MERGE_POLYMESH)
+        NAME(RC_TIMER_ERODE_AREA)
+        NAME(RC_TIMER_MARK_BOX_AREA)
+        NAME(RC_TIMER_MARK_CYLINDER_AREA)
+        NAME(RC_TIMER_MARK_CONVEXPOLY_AREA)
+        NAME(RC_TIMER_BUILD_DISTANCEFIELD)
+        NAME(RC_TIMER_BUILD_DISTANCEFIELD_DIST)
+        NAME(RC_TIMER_BUILD_DISTANCEFIELD_BLUR)
+        NAME(RC_TIMER_BUILD_REGIONS)
+        NAME(RC_TIMER_BUILD_REGIONS_WATERSHED)
+        NAME(RC_TIMER_BUILD_REGIONS_EXPAND)
+        NAME(RC_TIMER_BUILD_REGIONS_FLOOD)
+        NAME(RC_TIMER_BUILD_REGIONS_FILTER)
+        NAME(RC_TIMER_BUILD_LAYERS)
+        NAME(RC_TIMER_BUILD_POLYMESHDETAIL)
+        NAME(RC_TIMER_MERGE_POLYMESHDETAIL)
+#undef NAME
+    case RC_MAX_TIMERS:
+        break;
+    }
+    return "";
+}
+
+// Recast.h's constants, in the order the tests list them, and RC_PI.
+int shim_constants(int* out, float* pi) {
+    const int values[] = {
+        RC_SPAN_HEIGHT_BITS,
+        RC_SPAN_MAX_HEIGHT,
+        RC_SPANS_PER_POOL,
+        RC_BORDER_REG,
+        RC_MULTIPLE_REGS,
+        RC_BORDER_VERTEX,
+        RC_AREA_BORDER,
+        RC_CONTOUR_TESS_WALL_EDGES,
+        RC_CONTOUR_TESS_AREA_EDGES,
+        RC_CONTOUR_REG_MASK,
+        RC_MESH_NULL_IDX,
+        RC_NULL_AREA,
+        RC_WALKABLE_AREA,
+        RC_NOT_CONNECTED,
+        RC_LOG_PROGRESS,
+        RC_LOG_WARNING,
+        RC_LOG_ERROR,
+    };
+    const int n = (int)(sizeof(values) / sizeof(values[0]));
+    for (int i = 0; i < n; ++i) out[i] = values[i];
+    *pi = RC_PI;
+    return n;
+}
+
 float shim_cosf(float x) { return cosf(x); }
 
 void shim_calc_bounds(const float* verts, int nv, float* bmin, float* bmax) {
@@ -170,6 +259,56 @@ void shim_hf_free(void* hf) { rcFreeHeightField((rcHeightfield*)hf); }
 int shim_add_span(void* ctx, void* hf, int x, int z, unsigned short smin, unsigned short smax,
                   unsigned char area, int merge) {
     return rcAddSpan((rcContext*)ctx, *(rcHeightfield*)hf, x, z, smin, smax, area, merge);
+}
+
+// A span as the benchmark replays it.
+struct ReplaySpan {
+    int x;
+    int z;
+    unsigned short smin;
+    unsigned short smax;
+    unsigned char area;
+};
+
+// The spans of `hf`, column by column and bottom up, into `out`, which
+// holds `cap` of them; gives how many there are.
+int shim_hf_collect_spans(void* hf_ptr, ReplaySpan* out, int cap) {
+    const rcHeightfield& hf = *(rcHeightfield*)hf_ptr;
+    int n = 0;
+    for (int z = 0; z < hf.height; ++z) {
+        for (int x = 0; x < hf.width; ++x) {
+            for (const rcSpan* s = hf.spans[x + z * hf.width]; s; s = s->next) {
+                if (n < cap) {
+                    out[n].x = x;
+                    out[n].z = z;
+                    out[n].smin = (unsigned short)s->smin;
+                    out[n].smax = (unsigned short)s->smax;
+                    out[n].area = (unsigned char)s->area;
+                }
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+// Adds each span, as a caller of rcAddSpan writes it.
+void shim_add_spans(void* ctx, void* hf, const ReplaySpan* spans, int n, int merge) {
+    for (int i = 0; i < n; ++i) {
+        const ReplaySpan& s = spans[i];
+        rcAddSpan((rcContext*)ctx, *(rcHeightfield*)hf, s.x, s.z, s.smin, s.smax, s.area, merge);
+    }
+}
+
+// Rasterizes the triangles one by one, as a caller of rcRasterizeTriangle
+// writes it.
+void shim_rasterize_each(void* ctx, const float* verts, const int* tris,
+                         const unsigned char* areas, int nt, void* hf, int merge) {
+    for (int i = 0; i < nt; ++i) {
+        const int* t = &tris[i * 3];
+        rcRasterizeTriangle((rcContext*)ctx, &verts[t[0] * 3], &verts[t[1] * 3], &verts[t[2] * 3],
+                            areas[i], *(rcHeightfield*)hf, merge);
+    }
 }
 
 int shim_rasterize_triangle(void* ctx, const float* v0, const float* v1, const float* v2,

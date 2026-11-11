@@ -1129,7 +1129,7 @@ test "a column of more than 63 floors logs too many layers as the original" {
     try expectSameDump("compact", &chf, original_chf);
 }
 
-test "log messages are cut as the original cuts them" {
+test "the context logs, cuts messages and times as the original's" {
     var logs = try Logs.init();
     defer logs.deinit();
     for ([_]usize{ 0, 1, 510, 511, 512, 600, 2000 }) |len| {
@@ -1145,15 +1145,78 @@ test "log messages are cut as the original cuts them" {
     ctx.resetTimers();
     upstream.shim_log_reset(logs.original);
     try logs.expectSame("reset");
+    for (0..recast.max_timers) |i| {
+        const label: recast.TimerLabel = @fromBackingInt(@as(u32, @intCast(i)));
+        const c_label: c_int = @intCast(i);
+        ctx.startTimer(label);
+        ctx.stopTimer(label);
+        upstream.shim_log_timer(logs.original, c_label, 1);
+        upstream.shim_log_timer(logs.original, c_label, 0);
+        const time = upstream.shim_log_accumulated(logs.original, c_label);
+        try testing.expectEqual(time, ctx.accumulatedTime(label));
+        const default_time = upstream.shim_default_accumulated(c_label, 1);
+        try testing.expectEqual(default_time, recast.Context.none.accumulatedTime(label));
+    }
+    try logs.expectSame("timers");
     ctx.enableLog(false);
     ctx.enableTimer(false);
     upstream.shim_log_enable(logs.original, 0, 0);
     ctx.log(.err, "lost", .{});
     ctx.startTimer(.total);
+    ctx.stopTimer(.total);
     ctx.resetLog();
+    ctx.resetTimers();
     upstream.shim_log_message(logs.original, 3, "lost");
+    upstream.shim_log_timer(logs.original, 0, 1);
+    upstream.shim_log_timer(logs.original, 0, 0);
     upstream.shim_log_reset(logs.original);
     try logs.expectSame("disabled");
+    const time = upstream.shim_log_accumulated(logs.original, 0);
+    try testing.expectEqual(time, ctx.accumulatedTime(.total));
+    var none: recast.Context = .none;
+    none.enableTimer(false);
+    try testing.expectEqual(upstream.shim_default_accumulated(0, 0), none.accumulatedTime(.total));
+}
+
+test "constants, log categories and timer labels have the original's values" {
+    var original: [32]c_int = undefined;
+    var original_pi: f32 = undefined;
+    const n: usize = @intCast(upstream.shim_constants(&original, &original_pi));
+    const wall: recast.ContourBuildFlags = .{ .tess_wall_edges = true };
+    const area: recast.ContourBuildFlags = .{ .tess_area_edges = true };
+    const port = [_]i64{
+        recast.span_height_bits,
+        recast.span_max_height,
+        recast.spans_per_pool,
+        recast.border_reg,
+        recast.multiple_regs,
+        recast.border_vertex,
+        recast.area_border,
+        @as(u32, @bitCast(wall)),
+        @as(u32, @bitCast(area)),
+        recast.contour_reg_mask,
+        recast.mesh_null_idx,
+        recast.null_area,
+        recast.walkable_area,
+        recast.not_connected,
+        @backingInt(recast.LogCategory.progress),
+        @backingInt(recast.LogCategory.warning),
+        @backingInt(recast.LogCategory.err),
+    };
+    try testing.expectEqual(n, port.len);
+    for (original[0..n], port) |o, p| try testing.expectEqual(@as(i64, o), p);
+    try testing.expectEqual(@as(u32, @bitCast(original_pi)), @as(u32, @bitCast(recast.pi)));
+    try testing.expectEqual(wall, recast.ContourBuildFlags.default);
+
+    // Each label has the original's name, in snake case, and value.
+    try testing.expectEqual(upstream.shim_max_timers(), @as(c_int, recast.max_timers));
+    for (0..recast.max_timers) |i| {
+        const label: recast.TimerLabel = @fromBackingInt(@as(u32, @intCast(i)));
+        const name = std.mem.span(upstream.shim_timer_label_name(@intCast(i)));
+        var buffer: [64]u8 = undefined;
+        try testing.expectEqualStrings("RC_TIMER_", name[0..@min(name.len, 9)]);
+        try testing.expectEqualStrings(std.ascii.upperString(&buffer, @tagName(label)), name[9..]);
+    }
 }
 
 /// Loomwork's navmesh tile settings.

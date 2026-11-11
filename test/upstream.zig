@@ -27,6 +27,14 @@ pub extern fn shim_log_text(log: *Log, len: *usize) [*]const u8;
 pub extern fn shim_log_clear(log: *Log) void;
 pub extern fn shim_log_message(log: *Log, category: c_int, text: [*:0]const u8) void;
 pub extern fn shim_log_reset(log: *Log) void;
+pub extern fn shim_log_timer(log: *Log, label: c_int, start: c_int) void;
+pub extern fn shim_log_accumulated(log: *Log, label: c_int) c_int;
+pub extern fn shim_default_accumulated(label: c_int, timer: c_int) c_int;
+pub extern fn shim_max_timers() c_int;
+pub extern fn shim_timer_label_name(label: c_int) [*:0]const u8;
+/// Writes Recast.h's integer constants to `out`, which holds 32, and gives
+/// how many it wrote.
+pub extern fn shim_constants(out: *[32]c_int, pi: *f32) c_int;
 
 pub extern fn shim_cosf(x: f32) f32;
 pub extern fn shim_calc_bounds(verts: [*]const f32, nv: c_int, bmin: *[3]f32, bmax: *[3]f32) void;
@@ -105,6 +113,34 @@ pub extern fn shim_rasterize_triangles_u16(
     hf: *Heightfield,
     merge: c_int,
 ) c_int;
+/// A span as the benchmark replays it.
+pub const ReplaySpan = extern struct {
+    x: c_int,
+    z: c_int,
+    smin: u16,
+    smax: u16,
+    area: u8,
+};
+
+/// Writes the spans of `hf`, column by column and bottom up, to `out`, which
+/// holds `cap`, and gives how many there are.
+pub extern fn shim_hf_collect_spans(hf: *Heightfield, out: [*]ReplaySpan, cap: c_int) c_int;
+pub extern fn shim_add_spans(
+    log: *Log,
+    hf: *Heightfield,
+    spans: [*]const ReplaySpan,
+    n: c_int,
+    merge: c_int,
+) void;
+pub extern fn shim_rasterize_each(
+    log: *Log,
+    verts: [*]const f32,
+    tris: [*]const c_int,
+    areas: [*]const u8,
+    nt: c_int,
+    hf: *Heightfield,
+    merge: c_int,
+) void;
 pub extern fn shim_rasterize_unindexed(
     log: *Log,
     verts: [*]const f32,

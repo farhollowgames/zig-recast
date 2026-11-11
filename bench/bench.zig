@@ -38,6 +38,8 @@ const Feature = enum(u8) {
     clear_unwalkable,
     rasterize_u16,
     rasterize_unindexed,
+    rasterize_each,
+    add_spans,
     copy_polymesh,
     heightfield_layers,
     regions_monotone,
@@ -211,6 +213,18 @@ fn info(feature: Feature) Info {
             .original = "rcRasterizeTriangles",
             .port = "rasterizeUnindexedTriangles",
             .per = .triangles,
+        },
+        .rasterize_each => .{
+            .title = "Rasterization, one triangle at a time",
+            .original = "rcRasterizeTriangle",
+            .port = "rasterizeTriangle",
+            .per = .triangles,
+        },
+        .add_spans => .{
+            .title = "Adding spans, the rasterized field's again",
+            .original = "rcAddSpan",
+            .port = "addSpan",
+            .per = .spans,
         },
         .copy_polymesh => .{
             .title = "Polygon mesh copy",
@@ -595,6 +609,32 @@ fn buildPort(
         lap.end(.rasterize_unindexed, &other);
     }
     {
+        var other = try heightfieldOf(gpa, cfg);
+        defer other.deinit(gpa);
+        lap.skip();
+        const climb = cfg.walkable_climb;
+        for (0..tris.len / 3) |t| {
+            const tri = tris[t * 3 ..][0..3];
+            const v0 = verts[@as(usize, @intCast(tri[0])) * 3 ..][0..3];
+            const v1 = verts[@as(usize, @intCast(tri[1])) * 3 ..][0..3];
+            const v2 = verts[@as(usize, @intCast(tri[2])) * 3 ..][0..3];
+            try recast.rasterizeTriangle(ctx, gpa, v0, v1, v2, areas[t], &other, climb);
+        }
+        lap.end(.rasterize_each, &other);
+    }
+    {
+        const spans = try collectSpans(gpa, &hf);
+        defer gpa.free(spans);
+        var other = try heightfieldOf(gpa, cfg);
+        defer other.deinit(gpa);
+        lap.skip();
+        const climb = cfg.walkable_climb;
+        for (spans) |s| {
+            try recast.addSpan(ctx, gpa, &other, s.x, s.z, s.smin, s.smax, s.area, climb);
+        }
+        lap.end(.add_spans, &other);
+    }
+    {
         var copy = try recast.copyPolyMesh(ctx, gpa, &pmesh);
         lap.end(.copy_polymesh, &copy);
         copy.deinit(gpa);
@@ -633,6 +673,25 @@ fn buildPort(
     recast.markCylinderArea(ctx, &marks.centre, marks.radius, marks.height, 4, &chf);
     lap.end(.mark_cylinder, &chf);
     return .{ .pmesh = pmesh, .dmesh = dmesh };
+}
+
+/// The spans of `hf`, column by column and bottom up, as the original's
+/// side collects them.
+fn collectSpans(gpa: std.mem.Allocator, hf: *const recast.Heightfield) ![]upstream.ReplaySpan {
+    const spans = try gpa.alloc(upstream.ReplaySpan, spanCount(hf));
+    var n: usize = 0;
+    var z: i32 = 0;
+    while (z < hf.height) : (z += 1) {
+        var x: i32 = 0;
+        while (x < hf.width) : (x += 1) {
+            var span = hf.spans[@intCast(x + z * hf.width)];
+            while (span) |s| : (span = s.next) {
+                spans[n] = .{ .x = x, .z = z, .smin = s.smin, .smax = s.smax, .area = s.area };
+                n += 1;
+            }
+        }
+    }
+    return spans;
 }
 
 /// Every span of `hf`, walkable or not.
@@ -743,6 +802,24 @@ fn buildOriginal(
         const flat = tile.flat_verts.ptr;
         _ = upstream.shim_rasterize_unindexed(log, flat, areas.ptr, nt, other, climb);
         lap.end(.rasterize_unindexed, {});
+    }
+    {
+        const other = try originalHeightfieldOf(log, cfg);
+        defer upstream.shim_hf_free(other);
+        lap.skip();
+        upstream.shim_rasterize_each(log, verts.ptr, tris.ptr, areas.ptr, nt, other, climb);
+        lap.end(.rasterize_each, {});
+    }
+    {
+        const count = upstream.shim_hf_collect_spans(hf, undefined, 0);
+        const spans = try std.heap.c_allocator.alloc(upstream.ReplaySpan, @intCast(count));
+        defer std.heap.c_allocator.free(spans);
+        _ = upstream.shim_hf_collect_spans(hf, spans.ptr, count);
+        const other = try originalHeightfieldOf(log, cfg);
+        defer upstream.shim_hf_free(other);
+        lap.skip();
+        upstream.shim_add_spans(log, other, spans.ptr, count, climb);
+        lap.end(.add_spans, {});
     }
     {
         const copy = upstream.shim_polymesh_copy(log, pmesh) orelse return error.OutOfMemory;

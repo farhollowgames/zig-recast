@@ -59,10 +59,10 @@ pub const Recorder = struct {
         fromPtr(ptr).print("E{d}\n", .{@backingInt(label)});
     }
 
+    /// A time that tells the labels apart, as the shim's.
     fn accumulatedTime(ptr: *anyopaque, label: recast.TimerLabel) i32 {
         _ = ptr;
-        _ = label;
-        return -1;
+        return @as(i32, @intCast(@backingInt(label))) * 3 + 1;
     }
 };
 
