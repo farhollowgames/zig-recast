@@ -17,9 +17,9 @@ runs before them (1). `--cpu` pins the benchmark to one CPU, and
 
 ## Machine and flags
 
-Measured on 11 November 2026, at commit `0c37e46`, on an AMD Ryzen 9
+Measured on 11 November 2026, at commit `c14a021`, on an AMD Ryzen 9
 9950X3D (16 cores) under Linux 7.3.3 (CachyOS), pinned to CPU 2, one of the
-eight with the stacked cache. The one-minute load average was 1.4 to 3.2
+eight with the stacked cache. The one-minute load average was at most 3.0
 during the runs, on 32 hardware threads.
 
 - **The port:** Zig 0.17.0, ReleaseFast, for the machine's own CPU
@@ -33,15 +33,21 @@ during the runs, on 32 hardware threads.
 - **Both:** frame pointers kept, and no fused multiply-adds, which the
   tests need for equal outputs.
 
-Earlier figures were taken at commit `0e9beae`. Run beside it on the same
-quiet machine, `0c37e46` is slower on some rows, and the change is the one
-that refuses polygons of more than 127 vertices in the detail mesh: the
-detail mesh on the tiled terrain went from 0.55 to 0.67, the watershed on
-the 256 m rolling ground from 0.72 to between 0.78 and 0.89, and grid size
-from 1.09 to 1.17. The check that change adds runs only when `nvp` is past
-127, which no input here has, and the watershed and grid size code did not
-change, so the cost is in how the benchmark compiles since then (code
-layout), not in work added to a timed loop.
+Earlier figures were taken at commit `0e9beae`. The refusal of polygons of
+more than 127 vertices in the detail mesh, added after it, first made
+three rows slower; each was traced in the compiled benchmark:
+
+- **Detail mesh on the tiled terrain, from 0.55 to 0.67.** A real change
+  in the code: written inside `buildPolyMeshDetail`, the refusal's loop and
+  log changed which helpers the compiler inlined, and the row took 51 ms
+  instead of 41. The refusal is now a separate function marked cold, the
+  port's code in the benchmark is again the same instructions as at
+  `0e9beae` but for that one call, and the row is back to 0.55.
+- **Grid size, from 1.09 to 1.17**, and **the watershed on the 256 m
+  rolling ground, from 0.72 to between 0.78 and 0.94.** Code layout, as is
+  the move of the low hanging obstacles filter on the tiled inputs, from
+  about 0.65 to 0.86 to 0.90, that came with the fix above; see the code
+  layout bias below.
 
 ## Method
 
@@ -102,6 +108,24 @@ on both sides on the whole 256 m terrain, as its regions overflow their
   Short, memory-bound features (the span count, the span filters, creating
   the heightfield) move the most from run to run, so theirs are the least
   certain figures, as their spreads show.
+- **Code layout.** Where a hot loop falls against the CPU's 32- and
+  64-byte fetch blocks moves whenever code before it in the binary
+  changes size, and a row can move with it by more than its spread with
+  no change to its own instructions. Between `0e9beae` and `c14a021`, the
+  port's watershed, low hanging obstacles filter and grid size compile to
+  the same instructions in the benchmark, at other offsets. The watershed
+  on the 256 m rolling ground took 150 to 155 ms at the one and 161 to
+  180 ms at the other, and the original's, whose code is unchanged too,
+  208 ms and 188 to 192 ms. The low hanging obstacles filter on the tiled
+  inputs took 2.5 to 2.8 ms at the one and 3.4 to 3.7 ms at the other
+  (about 0.65 times the original's time then, 0.86 to 0.90 now): the hot
+  path of its inner loop now spans three 32-byte blocks, where it spanned
+  two.
+  In grid size, the port's loop takes 1.2 ns a call at both, and the
+  original's went from 1.1 to 1.0 ns. Neither side controls this in the
+  benchmark, and a program that inlines the port's functions lays them
+  out its own way. These three are the rows where it was seen; others may
+  move by a few percent the same way.
 - One machine, one core, these inputs.
 
 ## Summary
@@ -112,43 +136,43 @@ time).
 
 | feature | port ÷ original |
 | --- | ---: |
-| Whole build | 0.37 to 0.91 |
-| Heightfield | 0.97 to 1.00 |
-| Walkable triangles | 0.92 to 1.04 |
-| Rasterization, int indices | 0.90 to 0.95 |
-| Low hanging obstacles filter | 0.63 to 0.86 |
-| Ledge filter | 0.87 to 0.92 |
-| Low height filter | 0.76 to 0.89 |
-| Compact heightfield | 0.87 to 0.91 |
-| Erosion | 0.96 to 0.99 |
-| Distance field | 1.09 to 1.31 |
-| Watershed regions | 0.58 to 0.89 |
-| Contours | 0.85 to 1.06 |
-| Polygon mesh | 0.87 to 0.97 |
-| Detail mesh | 0.09 to 0.83 |
-| Span count | 0.84 to 1.05 |
-| Unwalkable triangles | 0.88 to 1.01 |
-| Rasterization, unsigned short indices | 0.92 to 0.95 |
-| Rasterization, unindexed | 0.90 to 0.95 |
-| Rasterization, one triangle at a time | 0.89 to 0.94 |
-| Adding spans, the rasterized field's again | 0.59 to 0.74 |
-| Polygon mesh copy | 0.85 to 1.02 |
-| Heightfield layers | 0.94 to 0.98 |
-| Monotone regions | 0.39 to 0.89 |
-| Layer regions | 0.91 to 0.98 |
-| Median area filter | 1.00 to 1.02 |
-| Box area | 0.81 to 0.94 |
-| Convex area | 0.83 to 0.87 |
-| Cylinder area | 0.79 to 0.85 |
-| Polygon mesh merge, every tile | 1.03 to 1.09 |
-| Detail mesh merge, every tile | 0.44 to 0.55 |
+| Whole build | 0.38 to 0.92 |
+| Heightfield | 0.95 to 1.00 |
+| Walkable triangles | 0.93 to 1.06 |
+| Rasterization, int indices | 0.90 to 0.96 |
+| Low hanging obstacles filter | 0.86 to 0.92 |
+| Ledge filter | 0.88 to 0.92 |
+| Low height filter | 0.79 to 0.95 |
+| Compact heightfield | 0.87 to 0.92 |
+| Erosion | 0.99 to 1.00 |
+| Distance field | 1.09 to 1.30 |
+| Watershed regions | 0.58 to 0.93 |
+| Contours | 0.88 to 1.05 |
+| Polygon mesh | 0.86 to 0.97 |
+| Detail mesh | 0.09 to 0.76 |
+| Span count | 0.88 to 1.05 |
+| Unwalkable triangles | 0.96 to 1.04 |
+| Rasterization, unsigned short indices | 0.93 to 0.96 |
+| Rasterization, unindexed | 0.90 to 0.96 |
+| Rasterization, one triangle at a time | 0.90 to 0.96 |
+| Adding spans, the rasterized field's again | 0.57 to 0.74 |
+| Polygon mesh copy | 0.89 to 1.06 |
+| Heightfield layers | 0.95 to 0.98 |
+| Monotone regions | 0.39 to 0.85 |
+| Layer regions | 0.91 to 0.99 |
+| Median area filter | 1.00 to 1.06 |
+| Box area | 0.79 to 0.96 |
+| Convex area | 0.83 to 0.86 |
+| Cylinder area | 0.75 to 0.84 |
+| Polygon mesh merge, every tile | 0.98 to 1.12 |
+| Detail mesh merge, every tile | 0.48 to 0.52 |
 | Bounds | 0.27 to 0.29 |
-| Grid size | 1.16 to 1.20 |
+| Grid size | 1.17 to 1.19 |
 | Polygon offset, a hexagon | 0.76 to 0.77 |
 
 ## Where the port is faster
 
-- **Detail mesh, 0.09 to 0.83 times.** Where the original measures each
+- **Detail mesh, 0.09 to 0.76 times.** Where the original measures each
   sample against each triangle in turn, the port measures a vector of
   samples at a time against a triangle (`@Vector`, as wide as the CPU's),
   with what depends only on the triangle worked out once. It finds a
@@ -157,8 +181,8 @@ time).
   span borders its region, where the original redoes that for every
   polygon whose patch covers the span. The more samples a polygon takes,
   the more this gains: on the rolling ground, whose polygons take up to
-  119 detail vertices, the port is eight to eleven times as fast.
-- **Compact heightfield, 0.87 to 0.91 times.** The port builds a span's
+  119 detail vertices, the port is nine to eleven times as fast.
+- **Compact heightfield, 0.87 to 0.92 times.** The port builds a span's
   four connections in a register and stores the span once.
 - **Loops that store to bytes.** Zig has no type-based aliasing, so through
   the heightfield's pointer each store to a distance, flag or area makes a
@@ -168,21 +192,21 @@ time).
 
 ## Where the port is slower
 
-- **Distance field, 1.09 to 1.31 times**, the larger the field the slower.
+- **Distance field, 1.09 to 1.30 times**, the larger the field the slower.
   Each of its four passes (marking the borders, the two sweeps and the
   blur) takes 20 to 30% longer in samples of the rolling ground's build,
   though their loops compile to nearly the original's instructions. The
   one difference found is that the port keeps the four neighbours' cell
   indices on the stack, where the original addresses them from a row
   pointer; whether that is the cause is not known.
-- **Grid size, 1.16 to 1.20 times**, about 0.2 ns a call: the port checks
+- **Grid size, 1.17 to 1.19 times**, about 0.2 ns a call: the port checks
   the range before converting a float to an int, so that out-of-range
   values give x86-64's result on every machine, where the original's
   `(int)` is one instruction.
-- **Contours on the rolling ground, 1.05 and 1.06 times**; 0.85 to 0.99
+- **Contours on the rolling ground, 1.04 and 1.05 times**; 0.88 to 0.98
   on the other inputs.
-- **Polygon mesh merge on the 256 m rolling ground, 1.09 times**, of 9 µs;
-  1.03 on the other two inputs.
+- **Polygon mesh merge on the 256 m rolling ground, 1.12 times**, of 9 µs;
+  1.01 and 0.98 on the other two inputs.
 
 Every other feature is within 6% of the original on every input, or
 faster; differences of a few percent are within the spread of the runs.
@@ -195,13 +219,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 10.1 k triangles | 8.12 ms, 1.2 M/s | 7.42 ms, 1.4 M/s | 0.91 | 1.1% / 1.5% | 0.91 to 0.92 |
-| nav_test.obj | 1612 triangles | 10.67 ms, 151.0 k/s | 8.82 ms, 182.8 k/s | 0.83 | 0.4% / 0.9% | 0.83 to 0.83 |
-| undulating.obj | 5202 triangles | 57.68 ms, 90.2 k/s | 22.82 ms, 228.0 k/s | 0.40 | 1.1% / 2.6% | 0.40 to 0.40 |
-| terrain 256 m | 130.1 k triangles | 141.72 ms, 918.0 k/s | 103.93 ms, 1.3 M/s | 0.73 | 0.5% / 0.9% | 0.73 to 0.73 |
-| terrain 256 m, 64 m tiles | 136.3 k triangles | 546.42 ms, 249.5 k/s | 437.08 ms, 311.9 k/s | 0.80 | 0.2% / 1.1% | 0.80 to 0.80 |
-| vale 256 m, 64 m tiles | 137.3 k triangles | 1032.74 ms, 132.9 k/s | 480.27 ms, 285.9 k/s | 0.47 | 0.6% / 1.5% | 0.47 to 0.47 |
-| vale 1 km, 64 m tiles | 2.22 M triangles | 22100.61 ms, 100.5 k/s | 8281.00 ms, 268.3 k/s | 0.37 | 1.9% / 2.4% | 0.37 to 0.38 |
+| dungeon.obj | 10.1 k triangles | 8.07 ms, 1.3 M/s | 7.42 ms, 1.4 M/s | 0.92 | 0.8% / 1.6% | 0.91 to 0.92 |
+| nav_test.obj | 1612 triangles | 10.72 ms, 150.4 k/s | 8.86 ms, 181.9 k/s | 0.83 | 0.8% / 1.3% | 0.83 to 0.83 |
+| undulating.obj | 5202 triangles | 57.20 ms, 90.9 k/s | 22.66 ms, 229.6 k/s | 0.40 | 1.0% / 0.7% | 0.39 to 0.40 |
+| terrain 256 m | 130.1 k triangles | 142.00 ms, 916.2 k/s | 103.34 ms, 1.3 M/s | 0.73 | 1.5% / 3.0% | 0.72 to 0.73 |
+| terrain 256 m, 64 m tiles | 136.3 k triangles | 547.33 ms, 249.0 k/s | 426.50 ms, 319.6 k/s | 0.78 | 0.5% / 0.9% | 0.78 to 0.78 |
+| vale 256 m, 64 m tiles | 137.3 k triangles | 1027.72 ms, 133.6 k/s | 481.64 ms, 285.0 k/s | 0.47 | 0.8% / 4.5% | 0.46 to 0.47 |
+| vale 1 km, 64 m tiles | 2.22 M triangles | 21311.65 ms, 104.3 k/s | 8001.03 ms, 277.7 k/s | 0.38 | 0.4% / 3.7% | 0.38 to 0.39 |
 
 ### Heightfield
 
@@ -209,13 +233,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 81.8 k cells | 4.5 µs, 18.36 G/s | 4.4 µs, 18.56 G/s | 0.99 | 3.4% / 15.2% | 0.98 to 1.00 |
-| nav_test.obj | 78.7 k cells | 4.4 µs, 17.89 G/s | 4.3 µs, 18.35 G/s | 0.97 | 13.2% / 25.5% | 0.97 to 0.99 |
-| undulating.obj | 109.2 k cells | 5.8 µs, 18.89 G/s | 5.7 µs, 19.13 G/s | 0.99 | 3.3% / 6.8% | 0.98 to 1.05 |
-| terrain 256 m | 727.6 k cells | 43.7 µs, 16.65 G/s | 42.3 µs, 17.20 G/s | 0.97 | 28.3% / 102.0% | 0.96 to 1.02 |
-| terrain 256 m, 64 m tiles | 4.39 M cells | 270.6 µs, 16.23 G/s | 265.9 µs, 16.52 G/s | 0.98 | 14.3% / 15.6% | 0.93 to 0.99 |
-| vale 256 m, 64 m tiles | 4.39 M cells | 278.7 µs, 15.76 G/s | 277.9 µs, 15.81 G/s | 1.00 | 5.9% / 4.7% | 0.95 to 1.00 |
-| vale 1 km, 64 m tiles | 70.29 M cells | 4.43 ms, 15.85 G/s | 4.43 ms, 15.88 G/s | 1.00 | 17.3% / 15.5% | 0.92 to 1.01 |
+| dungeon.obj | 81.8 k cells | 5.2 µs, 15.62 G/s | 5.2 µs, 15.77 G/s | 0.99 | 64.4% / 17.4% | 0.98 to 0.99 |
+| nav_test.obj | 78.7 k cells | 4.4 µs, 17.89 G/s | 4.2 µs, 18.88 G/s | 0.95 | 58.1% / 21.9% | 0.85 to 0.98 |
+| undulating.obj | 109.2 k cells | 6.1 µs, 18.05 G/s | 6.0 µs, 18.20 G/s | 0.99 | 4.5% / 7.5% | 0.99 to 1.01 |
+| terrain 256 m | 727.6 k cells | 46.9 µs, 15.51 G/s | 46.9 µs, 15.53 G/s | 1.00 | 37.6% / 68.1% | 0.98 to 1.14 |
+| terrain 256 m, 64 m tiles | 4.39 M cells | 232.7 µs, 18.88 G/s | 232.6 µs, 18.89 G/s | 1.00 | 5.7% / 23.2% | 0.99 to 1.01 |
+| vale 256 m, 64 m tiles | 4.39 M cells | 230.7 µs, 19.05 G/s | 230.1 µs, 19.09 G/s | 1.00 | 5.7% / 13.1% | 0.98 to 1.01 |
+| vale 1 km, 64 m tiles | 70.29 M cells | 3.71 ms, 18.95 G/s | 3.72 ms, 18.89 G/s | 1.00 | 18.3% / 18.3% | 1.00 to 1.01 |
 
 ### Walkable triangles
 
@@ -223,13 +247,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 10.1 k triangles | 55.8 µs, 181.6 M/s | 58.2 µs, 174.1 M/s | 1.04 | 4.0% / 9.7% | 0.99 to 1.07 |
-| nav_test.obj | 1612 triangles | 3.8 µs, 422.3 M/s | 3.7 µs, 430.2 M/s | 0.98 | 18.6% / 10.7% | 0.97 to 0.99 |
-| undulating.obj | 5202 triangles | 8.8 µs, 590.7 M/s | 8.6 µs, 603.8 M/s | 0.98 | 2.0% / 5.3% | 0.97 to 0.98 |
-| terrain 256 m | 130.1 k triangles | 229.8 µs, 566.1 M/s | 210.9 µs, 616.9 M/s | 0.92 | 9.4% / 3.5% | 0.92 to 0.92 |
-| terrain 256 m, 64 m tiles | 136.3 k triangles | 236.8 µs, 575.6 M/s | 229.6 µs, 593.8 M/s | 0.97 | 5.6% / 7.3% | 0.92 to 0.98 |
-| vale 256 m, 64 m tiles | 137.3 k triangles | 226.3 µs, 606.8 M/s | 216.2 µs, 635.0 M/s | 0.96 | 8.6% / 46.3% | 0.96 to 1.00 |
-| vale 1 km, 64 m tiles | 2.22 M triangles | 3.66 ms, 606.7 M/s | 3.62 ms, 614.1 M/s | 0.99 | 4.4% / 6.6% | 0.97 to 0.99 |
+| dungeon.obj | 10.1 k triangles | 55.6 µs, 182.4 M/s | 58.7 µs, 172.8 M/s | 1.06 | 13.1% / 8.5% | 1.04 to 1.06 |
+| nav_test.obj | 1612 triangles | 3.9 µs, 410.5 M/s | 3.7 µs, 437.2 M/s | 0.94 | 8.7% / 6.5% | 0.94 to 0.98 |
+| undulating.obj | 5202 triangles | 8.8 µs, 590.0 M/s | 8.6 µs, 608.0 M/s | 0.97 | 3.1% / 2.0% | 0.96 to 0.97 |
+| terrain 256 m | 130.1 k triangles | 225.2 µs, 577.7 M/s | 210.4 µs, 618.3 M/s | 0.93 | 6.7% / 3.0% | 0.92 to 0.94 |
+| terrain 256 m, 64 m tiles | 136.3 k triangles | 244.5 µs, 557.4 M/s | 237.9 µs, 572.9 M/s | 0.97 | 15.5% / 10.7% | 0.97 to 0.98 |
+| vale 256 m, 64 m tiles | 137.3 k triangles | 224.7 µs, 610.9 M/s | 221.2 µs, 620.6 M/s | 0.98 | 8.0% / 10.7% | 0.95 to 1.01 |
+| vale 1 km, 64 m tiles | 2.22 M triangles | 3.64 ms, 611.1 M/s | 3.54 ms, 627.8 M/s | 0.97 | 6.8% / 3.7% | 0.96 to 0.98 |
 
 ### Rasterization, int indices
 
@@ -237,13 +261,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 10.1 k triangles | 4.53 ms, 2.2 M/s | 4.28 ms, 2.4 M/s | 0.95 | 0.8% / 0.5% | 0.95 to 0.95 |
-| nav_test.obj | 1612 triangles | 3.09 ms, 522.3 k/s | 2.83 ms, 569.9 k/s | 0.92 | 0.7% / 0.7% | 0.92 to 0.92 |
-| undulating.obj | 5202 triangles | 3.64 ms, 1.4 M/s | 3.45 ms, 1.5 M/s | 0.95 | 0.7% / 0.9% | 0.95 to 0.95 |
-| terrain 256 m | 130.1 k triangles | 31.97 ms, 4.1 M/s | 30.08 ms, 4.3 M/s | 0.94 | 1.2% / 1.2% | 0.94 to 0.95 |
-| terrain 256 m, 64 m tiles | 136.3 k triangles | 90.17 ms, 1.5 M/s | 81.03 ms, 1.7 M/s | 0.90 | 0.3% / 0.2% | 0.90 to 0.90 |
-| vale 256 m, 64 m tiles | 137.3 k triangles | 88.08 ms, 1.6 M/s | 78.94 ms, 1.7 M/s | 0.90 | 0.5% / 0.2% | 0.90 to 0.90 |
-| vale 1 km, 64 m tiles | 2.22 M triangles | 1457.09 ms, 1.5 M/s | 1307.72 ms, 1.7 M/s | 0.90 | 2.8% / 2.8% | 0.90 to 0.90 |
+| dungeon.obj | 10.1 k triangles | 4.56 ms, 2.2 M/s | 4.37 ms, 2.3 M/s | 0.96 | 2.1% / 1.3% | 0.96 to 0.96 |
+| nav_test.obj | 1612 triangles | 3.11 ms, 518.6 k/s | 2.86 ms, 562.9 k/s | 0.92 | 1.5% / 1.0% | 0.92 to 0.93 |
+| undulating.obj | 5202 triangles | 3.64 ms, 1.4 M/s | 3.48 ms, 1.5 M/s | 0.95 | 0.5% / 0.8% | 0.95 to 0.95 |
+| terrain 256 m | 130.1 k triangles | 31.08 ms, 4.2 M/s | 29.42 ms, 4.4 M/s | 0.95 | 0.5% / 1.3% | 0.94 to 0.95 |
+| terrain 256 m, 64 m tiles | 136.3 k triangles | 90.39 ms, 1.5 M/s | 81.43 ms, 1.7 M/s | 0.90 | 0.3% / 0.5% | 0.90 to 0.90 |
+| vale 256 m, 64 m tiles | 137.3 k triangles | 88.21 ms, 1.6 M/s | 79.44 ms, 1.7 M/s | 0.90 | 1.0% / 0.8% | 0.90 to 0.90 |
+| vale 1 km, 64 m tiles | 2.22 M triangles | 1423.75 ms, 1.6 M/s | 1279.60 ms, 1.7 M/s | 0.90 | 0.6% / 0.4% | 0.90 to 0.90 |
 
 ### Low hanging obstacles filter
 
@@ -251,13 +275,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 52.1 k spans | 81.5 µs, 639.5 M/s | 70.5 µs, 739.3 M/s | 0.86 | 11.1% / 4.9% | 0.84 to 0.89 |
-| nav_test.obj | 120.2 k spans | 136.8 µs, 878.2 M/s | 108.1 µs, 1.11 G/s | 0.79 | 9.2% / 6.9% | 0.79 to 0.83 |
-| undulating.obj | 108.7 k spans | 113.6 µs, 957.2 M/s | 85.2 µs, 1.28 G/s | 0.75 | 15.6% / 6.3% | 0.71 to 0.85 |
-| terrain 256 m | 741.4 k spans | 643.2 µs, 1.15 G/s | 455.9 µs, 1.63 G/s | 0.71 | 9.5% / 26.9% | 0.65 to 0.74 |
-| terrain 256 m, 64 m tiles | 4.41 M spans | 4.30 ms, 1.03 G/s | 2.72 ms, 1.62 G/s | 0.63 | 3.6% / 6.6% | 0.63 to 0.66 |
-| vale 256 m, 64 m tiles | 4.34 M spans | 4.03 ms, 1.08 G/s | 2.62 ms, 1.65 G/s | 0.65 | 6.3% / 17.6% | 0.63 to 0.66 |
-| vale 1 km, 64 m tiles | 70.09 M spans | 65.89 ms, 1.06 G/s | 42.17 ms, 1.66 G/s | 0.64 | 4.7% / 9.8% | 0.63 to 0.67 |
+| dungeon.obj | 52.1 k spans | 79.8 µs, 652.7 M/s | 70.8 µs, 736.1 M/s | 0.89 | 6.7% / 4.4% | 0.88 to 0.90 |
+| nav_test.obj | 120.2 k spans | 133.0 µs, 903.4 M/s | 117.8 µs, 1.02 G/s | 0.89 | 6.0% / 5.8% | 0.89 to 0.91 |
+| undulating.obj | 108.7 k spans | 108.1 µs, 1.01 G/s | 98.4 µs, 1.10 G/s | 0.91 | 21.5% / 4.2% | 0.88 to 0.97 |
+| terrain 256 m | 741.4 k spans | 640.9 µs, 1.16 G/s | 591.6 µs, 1.25 G/s | 0.92 | 7.1% / 9.3% | 0.91 to 0.94 |
+| terrain 256 m, 64 m tiles | 4.41 M spans | 4.09 ms, 1.08 G/s | 3.50 ms, 1.26 G/s | 0.86 | 3.8% / 2.0% | 0.86 to 0.87 |
+| vale 256 m, 64 m tiles | 4.34 M spans | 3.93 ms, 1.11 G/s | 3.42 ms, 1.27 G/s | 0.87 | 3.4% / 3.0% | 0.87 to 0.88 |
+| vale 1 km, 64 m tiles | 70.09 M spans | 63.14 ms, 1.11 G/s | 56.65 ms, 1.24 G/s | 0.90 | 4.0% / 3.4% | 0.89 to 0.90 |
 
 ### Ledge filter
 
@@ -265,13 +289,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 52.1 k spans | 419.2 µs, 124.3 M/s | 386.2 µs, 134.9 M/s | 0.92 | 1.6% / 5.0% | 0.92 to 0.92 |
-| nav_test.obj | 120.2 k spans | 950.3 µs, 126.5 M/s | 858.8 µs, 139.9 M/s | 0.90 | 12.2% / 14.9% | 0.90 to 0.91 |
-| undulating.obj | 108.7 k spans | 881.1 µs, 123.4 M/s | 783.7 µs, 138.7 M/s | 0.89 | 0.7% / 0.8% | 0.89 to 0.91 |
-| terrain 256 m | 741.4 k spans | 5.73 ms, 129.5 M/s | 4.99 ms, 148.5 M/s | 0.87 | 2.4% / 2.5% | 0.87 to 0.88 |
-| terrain 256 m, 64 m tiles | 4.41 M spans | 33.64 ms, 131.0 M/s | 30.01 ms, 146.9 M/s | 0.89 | 0.2% / 0.3% | 0.89 to 0.90 |
-| vale 256 m, 64 m tiles | 4.34 M spans | 33.97 ms, 127.8 M/s | 30.31 ms, 143.3 M/s | 0.89 | 0.3% / 0.3% | 0.88 to 0.89 |
-| vale 1 km, 64 m tiles | 70.09 M spans | 558.14 ms, 125.6 M/s | 496.39 ms, 141.2 M/s | 0.89 | 2.7% / 2.7% | 0.89 to 0.89 |
+| dungeon.obj | 52.1 k spans | 422.6 µs, 123.3 M/s | 387.8 µs, 134.4 M/s | 0.92 | 1.7% / 1.9% | 0.92 to 0.93 |
+| nav_test.obj | 120.2 k spans | 948.6 µs, 126.7 M/s | 854.2 µs, 140.7 M/s | 0.90 | 1.5% / 3.3% | 0.90 to 0.91 |
+| undulating.obj | 108.7 k spans | 884.2 µs, 123.0 M/s | 793.7 µs, 137.0 M/s | 0.90 | 0.4% / 1.1% | 0.90 to 0.90 |
+| terrain 256 m | 741.4 k spans | 5.55 ms, 133.6 M/s | 4.91 ms, 151.1 M/s | 0.88 | 3.8% / 3.3% | 0.88 to 0.88 |
+| terrain 256 m, 64 m tiles | 4.41 M spans | 33.60 ms, 131.2 M/s | 30.36 ms, 145.2 M/s | 0.90 | 1.0% / 2.0% | 0.90 to 0.90 |
+| vale 256 m, 64 m tiles | 4.34 M spans | 33.79 ms, 128.5 M/s | 30.57 ms, 142.1 M/s | 0.90 | 0.6% / 0.8% | 0.90 to 0.90 |
+| vale 1 km, 64 m tiles | 70.09 M spans | 545.44 ms, 128.5 M/s | 491.24 ms, 142.7 M/s | 0.90 | 0.9% / 1.1% | 0.90 to 0.90 |
 
 ### Low height filter
 
@@ -279,13 +303,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 52.1 k spans | 78.5 µs, 663.7 M/s | 65.9 µs, 790.4 M/s | 0.84 | 1.8% / 10.8% | 0.84 to 0.87 |
-| nav_test.obj | 120.2 k spans | 127.1 µs, 945.3 M/s | 113.3 µs, 1.06 G/s | 0.89 | 7.0% / 4.5% | 0.87 to 0.90 |
-| undulating.obj | 108.7 k spans | 96.1 µs, 1.13 G/s | 79.5 µs, 1.37 G/s | 0.83 | 15.4% / 13.8% | 0.79 to 0.84 |
-| terrain 256 m | 741.4 k spans | 500.9 µs, 1.48 G/s | 416.3 µs, 1.78 G/s | 0.83 | 4.6% / 17.0% | 0.82 to 0.84 |
-| terrain 256 m, 64 m tiles | 4.41 M spans | 3.23 ms, 1.36 G/s | 2.48 ms, 1.78 G/s | 0.77 | 1.7% / 1.8% | 0.75 to 0.80 |
-| vale 256 m, 64 m tiles | 4.34 M spans | 3.18 ms, 1.37 G/s | 2.47 ms, 1.76 G/s | 0.78 | 7.6% / 11.7% | 0.75 to 0.83 |
-| vale 1 km, 64 m tiles | 70.09 M spans | 53.05 ms, 1.32 G/s | 40.06 ms, 1.75 G/s | 0.76 | 7.7% / 11.0% | 0.74 to 0.81 |
+| dungeon.obj | 52.1 k spans | 82.7 µs, 629.7 M/s | 70.0 µs, 744.4 M/s | 0.85 | 3.4% / 9.3% | 0.85 to 0.88 |
+| nav_test.obj | 120.2 k spans | 126.0 µs, 953.8 M/s | 120.1 µs, 1.00 G/s | 0.95 | 4.4% / 6.8% | 0.94 to 0.96 |
+| undulating.obj | 108.7 k spans | 96.1 µs, 1.13 G/s | 80.7 µs, 1.35 G/s | 0.84 | 5.1% / 5.4% | 0.82 to 0.86 |
+| terrain 256 m | 741.4 k spans | 497.3 µs, 1.49 G/s | 439.2 µs, 1.69 G/s | 0.88 | 19.8% / 18.4% | 0.87 to 0.90 |
+| terrain 256 m, 64 m tiles | 4.41 M spans | 3.23 ms, 1.37 G/s | 2.60 ms, 1.69 G/s | 0.81 | 3.8% / 6.3% | 0.80 to 0.83 |
+| vale 256 m, 64 m tiles | 4.34 M spans | 3.11 ms, 1.40 G/s | 2.47 ms, 1.76 G/s | 0.79 | 17.6% / 4.0% | 0.78 to 0.79 |
+| vale 1 km, 64 m tiles | 70.09 M spans | 52.47 ms, 1.34 G/s | 43.54 ms, 1.61 G/s | 0.83 | 2.3% / 2.8% | 0.79 to 0.83 |
 
 ### Compact heightfield
 
@@ -293,13 +317,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 52.1 k spans | 359.6 µs, 144.9 M/s | 328.3 µs, 158.7 M/s | 0.91 | 2.3% / 8.9% | 0.91 to 0.92 |
-| nav_test.obj | 120.2 k spans | 700.8 µs, 171.5 M/s | 639.4 µs, 188.0 M/s | 0.91 | 1.4% / 1.6% | 0.91 to 0.91 |
-| undulating.obj | 108.7 k spans | 1.02 ms, 106.7 M/s | 898.4 µs, 121.0 M/s | 0.88 | 2.3% / 0.8% | 0.87 to 0.89 |
-| terrain 256 m | 741.4 k spans | 6.27 ms, 118.2 M/s | 5.49 ms, 135.1 M/s | 0.87 | 2.9% / 1.3% | 0.87 to 0.88 |
-| terrain 256 m, 64 m tiles | 4.41 M spans | 37.42 ms, 117.8 M/s | 32.95 ms, 133.8 M/s | 0.88 | 0.3% / 0.4% | 0.88 to 0.88 |
-| vale 256 m, 64 m tiles | 4.34 M spans | 38.18 ms, 113.8 M/s | 33.55 ms, 129.4 M/s | 0.88 | 0.3% / 0.4% | 0.88 to 0.88 |
-| vale 1 km, 64 m tiles | 70.09 M spans | 630.29 ms, 111.2 M/s | 553.42 ms, 126.6 M/s | 0.88 | 2.7% / 2.9% | 0.88 to 0.88 |
+| dungeon.obj | 52.1 k spans | 357.8 µs, 145.6 M/s | 330.1 µs, 157.8 M/s | 0.92 | 2.9% / 13.4% | 0.92 to 0.93 |
+| nav_test.obj | 120.2 k spans | 699.2 µs, 171.9 M/s | 639.1 µs, 188.1 M/s | 0.91 | 2.3% / 1.8% | 0.90 to 0.91 |
+| undulating.obj | 108.7 k spans | 1.02 ms, 106.7 M/s | 897.2 µs, 121.2 M/s | 0.88 | 3.2% / 1.3% | 0.88 to 0.88 |
+| terrain 256 m | 741.4 k spans | 6.30 ms, 117.8 M/s | 5.45 ms, 135.9 M/s | 0.87 | 3.5% / 3.1% | 0.86 to 0.87 |
+| terrain 256 m, 64 m tiles | 4.41 M spans | 37.48 ms, 117.6 M/s | 32.81 ms, 134.3 M/s | 0.88 | 1.1% / 1.1% | 0.88 to 0.88 |
+| vale 256 m, 64 m tiles | 4.34 M spans | 38.23 ms, 113.6 M/s | 33.35 ms, 130.2 M/s | 0.87 | 0.7% / 0.7% | 0.87 to 0.87 |
+| vale 1 km, 64 m tiles | 70.09 M spans | 626.69 ms, 111.8 M/s | 546.69 ms, 128.2 M/s | 0.87 | 2.1% / 2.1% | 0.87 to 0.87 |
 
 ### Erosion
 
@@ -307,13 +331,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 351.1 µs, 67.1 M/s | 349.0 µs, 67.5 M/s | 0.99 | 5.1% / 4.4% | 0.98 to 1.00 |
-| nav_test.obj | 56.8 k compact spans | 683.4 µs, 83.1 M/s | 673.0 µs, 84.4 M/s | 0.98 | 16.7% / 19.2% | 0.98 to 0.99 |
-| undulating.obj | 105.8 k compact spans | 1.02 ms, 103.6 M/s | 992.7 µs, 106.6 M/s | 0.97 | 2.6% / 1.3% | 0.97 to 0.97 |
-| terrain 256 m | 686.7 k compact spans | 6.60 ms, 104.0 M/s | 6.45 ms, 106.5 M/s | 0.98 | 0.3% / 0.8% | 0.98 to 0.98 |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 35.40 ms, 115.7 M/s | 34.00 ms, 120.4 M/s | 0.96 | 0.4% / 0.4% | 0.96 to 0.96 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 32.78 ms, 131.5 M/s | 31.38 ms, 137.3 M/s | 0.96 | 0.8% / 0.6% | 0.96 to 0.96 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 537.47 ms, 129.4 M/s | 518.24 ms, 134.2 M/s | 0.96 | 2.5% / 2.6% | 0.96 to 0.96 |
+| dungeon.obj | 23.6 k compact spans | 356.0 µs, 66.2 M/s | 351.1 µs, 67.1 M/s | 0.99 | 4.7% / 2.4% | 0.98 to 1.00 |
+| nav_test.obj | 56.8 k compact spans | 683.0 µs, 83.2 M/s | 681.6 µs, 83.3 M/s | 1.00 | 2.4% / 1.4% | 0.99 to 1.01 |
+| undulating.obj | 105.8 k compact spans | 1.02 ms, 103.5 M/s | 1.02 ms, 103.7 M/s | 1.00 | 1.5% / 3.1% | 0.99 to 1.00 |
+| terrain 256 m | 686.7 k compact spans | 6.63 ms, 103.6 M/s | 6.61 ms, 103.9 M/s | 1.00 | 0.8% / 1.5% | 1.00 to 1.00 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 35.50 ms, 115.3 M/s | 35.15 ms, 116.5 M/s | 0.99 | 0.4% / 0.8% | 0.99 to 0.99 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 32.77 ms, 131.5 M/s | 32.67 ms, 131.9 M/s | 1.00 | 4.7% / 0.8% | 0.98 to 1.00 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 536.52 ms, 129.6 M/s | 528.69 ms, 131.6 M/s | 0.99 | 1.1% / 0.5% | 0.98 to 0.99 |
 
 ### Distance field
 
@@ -321,13 +345,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 399.0 µs, 59.1 M/s | 434.5 µs, 54.2 M/s | 1.09 | 2.2% / 4.8% | 1.08 to 1.09 |
-| nav_test.obj | 56.8 k compact spans | 749.5 µs, 75.8 M/s | 824.0 µs, 68.9 M/s | 1.10 | 2.6% / 0.6% | 1.05 to 1.10 |
-| undulating.obj | 105.8 k compact spans | 1.18 ms, 90.0 M/s | 1.40 ms, 75.4 M/s | 1.19 | 2.9% / 0.7% | 1.19 to 1.19 |
-| terrain 256 m | 686.7 k compact spans | 7.62 ms, 90.2 M/s | 9.07 ms, 75.7 M/s | 1.19 | 1.0% / 0.3% | 1.18 to 1.19 |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 41.03 ms, 99.8 M/s | 51.13 ms, 80.1 M/s | 1.25 | 1.2% / 0.2% | 1.25 to 1.25 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 39.44 ms, 109.3 M/s | 51.60 ms, 83.5 M/s | 1.31 | 0.7% / 0.2% | 1.30 to 1.31 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 659.52 ms, 105.5 M/s | 860.33 ms, 80.8 M/s | 1.30 | 2.4% / 2.2% | 1.30 to 1.31 |
+| dungeon.obj | 23.6 k compact spans | 396.8 µs, 59.4 M/s | 435.8 µs, 54.1 M/s | 1.10 | 4.1% / 4.1% | 1.09 to 1.10 |
+| nav_test.obj | 56.8 k compact spans | 760.0 µs, 74.7 M/s | 829.3 µs, 68.5 M/s | 1.09 | 1.8% / 1.1% | 1.09 to 1.10 |
+| undulating.obj | 105.8 k compact spans | 1.17 ms, 90.2 M/s | 1.41 ms, 75.3 M/s | 1.20 | 4.2% / 1.9% | 1.19 to 1.20 |
+| terrain 256 m | 686.7 k compact spans | 7.62 ms, 90.1 M/s | 9.01 ms, 76.2 M/s | 1.18 | 0.9% / 0.4% | 1.18 to 1.19 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 41.01 ms, 99.9 M/s | 50.94 ms, 80.4 M/s | 1.24 | 0.5% / 0.1% | 1.24 to 1.25 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 39.73 ms, 108.5 M/s | 51.69 ms, 83.4 M/s | 1.30 | 1.7% / 0.7% | 1.30 to 1.30 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 653.77 ms, 106.4 M/s | 844.18 ms, 82.4 M/s | 1.29 | 0.7% / 1.1% | 1.28 to 1.29 |
 
 ### Watershed regions
 
@@ -335,13 +359,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 1.02 ms, 23.0 M/s | 712.2 µs, 33.1 M/s | 0.70 | 13.9% / 25.2% | 0.70 to 0.73 |
-| nav_test.obj | 56.8 k compact spans | 2.50 ms, 22.8 M/s | 1.52 ms, 37.4 M/s | 0.61 | 1.2% / 2.0% | 0.60 to 0.61 |
-| undulating.obj | 105.8 k compact spans | 5.04 ms, 21.0 M/s | 2.92 ms, 36.2 M/s | 0.58 | 0.5% / 3.5% | 0.58 to 0.59 |
-| terrain 256 m | 686.7 k compact spans | 37.03 ms, 18.5 M/s | 21.48 ms, 32.0 M/s | 0.58 | 0.7% / 2.9% | 0.58 to 0.58 |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 194.89 ms, 21.0 M/s | 122.26 ms, 33.5 M/s | 0.63 | 0.2% / 3.7% | 0.63 to 0.64 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 191.16 ms, 22.5 M/s | 170.61 ms, 25.3 M/s | 0.89 | 2.2% / 5.1% | 0.88 to 0.91 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 3167.34 ms, 22.0 M/s | 2773.99 ms, 25.1 M/s | 0.88 | 2.2% / 3.7% | 0.87 to 0.89 |
+| dungeon.obj | 23.6 k compact spans | 1.00 ms, 23.6 M/s | 699.3 µs, 33.7 M/s | 0.70 | 3.2% / 15.9% | 0.69 to 0.71 |
+| nav_test.obj | 56.8 k compact spans | 2.50 ms, 22.7 M/s | 1.53 ms, 37.2 M/s | 0.61 | 2.2% / 3.7% | 0.60 to 0.61 |
+| undulating.obj | 105.8 k compact spans | 5.02 ms, 21.1 M/s | 2.99 ms, 35.4 M/s | 0.59 | 0.6% / 3.8% | 0.58 to 0.59 |
+| terrain 256 m | 686.7 k compact spans | 36.83 ms, 18.6 M/s | 21.23 ms, 32.3 M/s | 0.58 | 0.9% / 2.5% | 0.57 to 0.58 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 194.74 ms, 21.0 M/s | 118.46 ms, 34.6 M/s | 0.61 | 0.5% / 0.7% | 0.61 to 0.62 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 189.34 ms, 22.8 M/s | 165.09 ms, 26.1 M/s | 0.87 | 2.0% / 11.1% | 0.85 to 0.87 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 3085.67 ms, 22.5 M/s | 2874.36 ms, 24.2 M/s | 0.93 | 9.0% / 9.9% | 0.88 to 0.94 |
 
 ### Contours
 
@@ -349,13 +373,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 241.7 µs, 97.5 M/s | 206.5 µs, 114.2 M/s | 0.85 | 7.2% / 1.5% | 0.83 to 0.85 |
-| nav_test.obj | 56.8 k compact spans | 421.5 µs, 134.7 M/s | 382.8 µs, 148.4 M/s | 0.91 | 4.2% / 3.6% | 0.90 to 0.91 |
-| undulating.obj | 105.8 k compact spans | 617.7 µs, 171.3 M/s | 592.2 µs, 178.6 M/s | 0.96 | 1.4% / 5.6% | 0.95 to 0.96 |
-| terrain 256 m | 686.7 k compact spans | 4.55 ms, 151.0 M/s | 4.25 ms, 161.7 M/s | 0.93 | 0.7% / 1.1% | 0.93 to 0.94 |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 19.45 ms, 210.5 M/s | 19.28 ms, 212.4 M/s | 0.99 | 0.5% / 0.4% | 0.99 to 0.99 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 15.76 ms, 273.5 M/s | 16.55 ms, 260.4 M/s | 1.05 | 2.7% / 3.0% | 1.05 to 1.06 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 245.92 ms, 282.8 M/s | 260.28 ms, 267.2 M/s | 1.06 | 0.7% / 0.4% | 1.05 to 1.06 |
+| dungeon.obj | 23.6 k compact spans | 235.8 µs, 100.0 M/s | 208.6 µs, 113.0 M/s | 0.88 | 10.8% / 2.7% | 0.87 to 0.89 |
+| nav_test.obj | 56.8 k compact spans | 413.6 µs, 137.3 M/s | 383.4 µs, 148.1 M/s | 0.93 | 1.3% / 2.3% | 0.91 to 0.93 |
+| undulating.obj | 105.8 k compact spans | 613.4 µs, 172.5 M/s | 585.8 µs, 180.6 M/s | 0.95 | 3.9% / 2.7% | 0.95 to 0.95 |
+| terrain 256 m | 686.7 k compact spans | 4.58 ms, 149.8 M/s | 4.24 ms, 161.8 M/s | 0.93 | 2.6% / 2.1% | 0.92 to 0.93 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 19.47 ms, 210.3 M/s | 19.10 ms, 214.4 M/s | 0.98 | 15.8% / 0.5% | 0.98 to 0.98 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 15.25 ms, 282.6 M/s | 15.89 ms, 271.2 M/s | 1.04 | 4.6% / 4.3% | 1.04 to 1.05 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 244.58 ms, 284.4 M/s | 255.79 ms, 271.9 M/s | 1.05 | 1.0% / 0.6% | 1.05 to 1.05 |
 
 ### Polygon mesh
 
@@ -363,13 +387,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 118 polygons | 200.3 µs, 589.1 k/s | 181.1 µs, 651.6 k/s | 0.90 | 3.0% / 5.2% | 0.89 to 0.91 |
-| nav_test.obj | 155 polygons | 174.2 µs, 889.8 k/s | 163.1 µs, 950.5 k/s | 0.94 | 3.1% / 3.2% | 0.92 to 0.94 |
-| undulating.obj | 216 polygons | 344.5 µs, 627.1 k/s | 309.7 µs, 697.3 k/s | 0.90 | 2.0% / 1.9% | 0.89 to 0.90 |
-| terrain 256 m | 2580 polygons | 5.87 ms, 439.2 k/s | 5.11 ms, 505.2 k/s | 0.87 | 0.4% / 1.5% | 0.86 to 0.87 |
-| terrain 256 m, 64 m tiles | 4098 polygons | 11.44 ms, 358.3 k/s | 9.99 ms, 410.2 k/s | 0.87 | 0.3% / 0.7% | 0.86 to 0.88 |
-| vale 256 m, 64 m tiles | 108 polygons | 111.3 µs, 970.2 k/s | 106.2 µs, 1.0 M/s | 0.95 | 4.6% / 5.7% | 0.95 to 0.96 |
-| vale 1 km, 64 m tiles | 684 polygons | 838.7 µs, 815.6 k/s | 811.4 µs, 843.0 k/s | 0.97 | 26.3% / 28.8% | 0.97 to 1.00 |
+| dungeon.obj | 118 polygons | 202.3 µs, 583.2 k/s | 177.0 µs, 666.7 k/s | 0.87 | 3.1% / 8.4% | 0.87 to 0.87 |
+| nav_test.obj | 155 polygons | 174.9 µs, 886.4 k/s | 157.4 µs, 985.0 k/s | 0.90 | 2.1% / 4.7% | 0.90 to 0.90 |
+| undulating.obj | 216 polygons | 347.3 µs, 622.0 k/s | 299.8 µs, 720.6 k/s | 0.86 | 2.0% / 8.2% | 0.86 to 0.87 |
+| terrain 256 m | 2580 polygons | 5.84 ms, 441.7 k/s | 5.06 ms, 510.0 k/s | 0.87 | 1.1% / 4.6% | 0.87 to 0.88 |
+| terrain 256 m, 64 m tiles | 4098 polygons | 11.44 ms, 358.3 k/s | 9.88 ms, 414.8 k/s | 0.86 | 1.7% / 1.3% | 0.86 to 0.86 |
+| vale 256 m, 64 m tiles | 108 polygons | 114.1 µs, 946.3 k/s | 107.4 µs, 1.0 M/s | 0.94 | 13.7% / 26.4% | 0.92 to 0.95 |
+| vale 1 km, 64 m tiles | 684 polygons | 682.7 µs, 1.0 M/s | 661.7 µs, 1.0 M/s | 0.97 | 5.0% / 7.9% | 0.96 to 0.99 |
 
 ### Detail mesh
 
@@ -377,13 +401,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 118 polygons | 374.0 µs, 315.5 k/s | 310.0 µs, 380.6 k/s | 0.83 | 3.0% / 2.3% | 0.82 to 0.83 |
-| nav_test.obj | 155 polygons | 1.14 ms, 136.0 k/s | 723.4 µs, 214.3 k/s | 0.63 | 1.8% / 2.1% | 0.58 to 0.64 |
-| undulating.obj | 216 polygons | 43.72 ms, 4941/s | 11.30 ms, 19.1 k/s | 0.26 | 1.4% / 4.6% | 0.26 to 0.26 |
-| terrain 256 m | 2580 polygons | 35.58 ms, 72.5 k/s | 16.60 ms, 155.4 k/s | 0.47 | 0.6% / 2.6% | 0.46 to 0.47 |
-| terrain 256 m, 64 m tiles | 4098 polygons | 75.02 ms, 54.6 k/s | 50.37 ms, 81.4 k/s | 0.67 | 0.9% / 0.3% | 0.67 to 0.67 |
-| vale 256 m, 64 m tiles | 108 polygons | 588.23 ms, 184/s | 68.08 ms, 1586/s | 0.12 | 0.6% / 0.6% | 0.12 to 0.12 |
-| vale 1 km, 64 m tiles | 684 polygons | 14591.56 ms, 47/s | 1384.57 ms, 494/s | 0.09 | 2.6% / 3.8% | 0.09 to 0.09 |
+| dungeon.obj | 118 polygons | 375.7 µs, 314.1 k/s | 283.9 µs, 415.6 k/s | 0.76 | 1.6% / 4.6% | 0.76 to 0.77 |
+| nav_test.obj | 155 polygons | 1.14 ms, 136.0 k/s | 666.6 µs, 232.5 k/s | 0.59 | 0.7% / 1.8% | 0.58 to 0.59 |
+| undulating.obj | 216 polygons | 43.35 ms, 4983/s | 11.05 ms, 19.5 k/s | 0.25 | 2.8% / 1.1% | 0.25 to 0.26 |
+| terrain 256 m | 2580 polygons | 35.55 ms, 72.6 k/s | 15.24 ms, 169.3 k/s | 0.43 | 0.4% / 15.3% | 0.43 to 0.43 |
+| terrain 256 m, 64 m tiles | 4098 polygons | 75.08 ms, 54.6 k/s | 40.97 ms, 100.0 k/s | 0.55 | 0.6% / 0.9% | 0.55 to 0.55 |
+| vale 256 m, 64 m tiles | 108 polygons | 586.30 ms, 184/s | 65.20 ms, 1656/s | 0.11 | 0.9% / 1.6% | 0.11 to 0.11 |
+| vale 1 km, 64 m tiles | 684 polygons | 14120.48 ms, 48/s | 1281.96 ms, 534/s | 0.09 | 0.5% / 0.4% | 0.09 to 0.09 |
 
 ### Span count
 
@@ -391,13 +415,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 52.1 k spans | 53.7 µs, 970.0 M/s | 48.8 µs, 1.07 G/s | 0.91 | 14.9% / 2.3% | 0.90 to 0.94 |
-| nav_test.obj | 120.2 k spans | 81.8 µs, 1.47 G/s | 79.9 µs, 1.50 G/s | 0.98 | 6.5% / 5.0% | 0.98 to 0.98 |
-| undulating.obj | 108.7 k spans | 52.1 µs, 2.09 G/s | 47.4 µs, 2.29 G/s | 0.91 | 25.4% / 2.5% | 0.89 to 0.93 |
-| terrain 256 m | 741.4 k spans | 355.2 µs, 2.09 G/s | 299.8 µs, 2.47 G/s | 0.84 | 36.9% / 4.8% | 0.81 to 0.91 |
-| terrain 256 m, 64 m tiles | 4.41 M spans | 1.81 ms, 2.44 G/s | 1.83 ms, 2.41 G/s | 1.01 | 10.4% / 3.4% | 0.94 to 1.06 |
-| vale 256 m, 64 m tiles | 4.34 M spans | 1.68 ms, 2.59 G/s | 1.75 ms, 2.48 G/s | 1.04 | 2.3% / 1.4% | 1.03 to 1.11 |
-| vale 1 km, 64 m tiles | 70.09 M spans | 27.46 ms, 2.55 G/s | 28.81 ms, 2.43 G/s | 1.05 | 8.6% / 3.7% | 0.99 to 1.11 |
+| dungeon.obj | 52.1 k spans | 52.4 µs, 994.6 M/s | 48.3 µs, 1.08 G/s | 0.92 | 14.4% / 10.8% | 0.91 to 0.98 |
+| nav_test.obj | 120.2 k spans | 80.3 µs, 1.50 G/s | 80.7 µs, 1.49 G/s | 1.00 | 18.7% / 5.5% | 0.97 to 1.01 |
+| undulating.obj | 108.7 k spans | 52.3 µs, 2.08 G/s | 48.2 µs, 2.26 G/s | 0.92 | 24.9% / 3.3% | 0.81 to 0.92 |
+| terrain 256 m | 741.4 k spans | 349.7 µs, 2.12 G/s | 306.3 µs, 2.42 G/s | 0.88 | 50.6% / 17.1% | 0.82 to 0.90 |
+| terrain 256 m, 64 m tiles | 4.41 M spans | 1.84 ms, 2.40 G/s | 1.80 ms, 2.44 G/s | 0.98 | 5.7% / 1.7% | 0.97 to 1.05 |
+| vale 256 m, 64 m tiles | 4.34 M spans | 1.70 ms, 2.56 G/s | 1.73 ms, 2.50 G/s | 1.02 | 37.1% / 1.9% | 1.02 to 1.04 |
+| vale 1 km, 64 m tiles | 70.09 M spans | 27.37 ms, 2.56 G/s | 28.77 ms, 2.44 G/s | 1.05 | 13.0% / 15.3% | 1.04 to 1.07 |
 
 ### Unwalkable triangles
 
@@ -405,13 +429,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 10.1 k triangles | 56.8 µs, 178.4 M/s | 57.1 µs, 177.4 M/s | 1.01 | 4.2% / 7.6% | 1.00 to 1.01 |
-| nav_test.obj | 1612 triangles | 4.0 µs, 398.3 M/s | 3.6 µs, 450.7 M/s | 0.88 | 15.8% / 9.8% | 0.84 to 0.89 |
-| undulating.obj | 5202 triangles | 8.4 µs, 617.4 M/s | 8.4 µs, 620.3 M/s | 1.00 | 2.4% / 2.1% | 0.97 to 1.00 |
-| terrain 256 m | 130.1 k triangles | 216.1 µs, 602.1 M/s | 210.2 µs, 618.9 M/s | 0.97 | 40.7% / 12.3% | 0.96 to 0.98 |
-| terrain 256 m, 64 m tiles | 136.3 k triangles | 236.8 µs, 575.5 M/s | 231.6 µs, 588.6 M/s | 0.98 | 3.2% / 9.4% | 0.97 to 0.98 |
-| vale 256 m, 64 m tiles | 137.3 k triangles | 213.3 µs, 643.6 M/s | 211.6 µs, 648.9 M/s | 0.99 | 9.8% / 36.8% | 0.99 to 1.01 |
-| vale 1 km, 64 m tiles | 2.22 M triangles | 3.46 ms, 643.0 M/s | 3.49 ms, 636.4 M/s | 1.01 | 6.2% / 6.6% | 1.00 to 1.02 |
+| dungeon.obj | 10.1 k triangles | 57.1 µs, 177.5 M/s | 59.3 µs, 171.0 M/s | 1.04 | 4.9% / 2.5% | 1.03 to 1.06 |
+| nav_test.obj | 1612 triangles | 4.0 µs, 401.2 M/s | 4.1 µs, 391.5 M/s | 1.02 | 8.2% / 16.6% | 0.99 to 1.10 |
+| undulating.obj | 5202 triangles | 8.4 µs, 621.1 M/s | 8.4 µs, 617.4 M/s | 1.01 | 2.9% / 5.5% | 1.00 to 1.01 |
+| terrain 256 m | 130.1 k triangles | 218.0 µs, 596.8 M/s | 209.6 µs, 620.6 M/s | 0.96 | 14.0% / 1.8% | 0.96 to 0.97 |
+| terrain 256 m, 64 m tiles | 136.3 k triangles | 233.6 µs, 583.6 M/s | 230.8 µs, 590.7 M/s | 0.99 | 1.8% / 2.9% | 0.98 to 1.00 |
+| vale 256 m, 64 m tiles | 137.3 k triangles | 211.8 µs, 648.3 M/s | 213.2 µs, 644.1 M/s | 1.01 | 5.4% / 4.0% | 1.00 to 1.01 |
+| vale 1 km, 64 m tiles | 2.22 M triangles | 3.46 ms, 641.8 M/s | 3.49 ms, 637.2 M/s | 1.01 | 2.9% / 1.4% | 1.01 to 1.01 |
 
 ### Rasterization, unsigned short indices
 
@@ -419,9 +443,9 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 10.1 k triangles | 4.59 ms, 2.2 M/s | 4.35 ms, 2.3 M/s | 0.95 | 1.2% / 0.8% | 0.94 to 0.95 |
-| nav_test.obj | 1612 triangles | 3.20 ms, 503.4 k/s | 2.96 ms, 545.0 k/s | 0.92 | 0.8% / 0.6% | 0.92 to 0.94 |
-| undulating.obj | 5202 triangles | 3.69 ms, 1.4 M/s | 3.51 ms, 1.5 M/s | 0.95 | 0.9% / 0.8% | 0.95 to 0.96 |
+| dungeon.obj | 10.1 k triangles | 4.62 ms, 2.2 M/s | 4.43 ms, 2.3 M/s | 0.96 | 2.8% / 0.8% | 0.96 to 0.96 |
+| nav_test.obj | 1612 triangles | 3.22 ms, 500.6 k/s | 3.00 ms, 537.9 k/s | 0.93 | 1.1% / 0.7% | 0.93 to 0.93 |
+| undulating.obj | 5202 triangles | 3.70 ms, 1.4 M/s | 3.55 ms, 1.5 M/s | 0.96 | 0.4% / 1.4% | 0.96 to 0.96 |
 
 ### Rasterization, unindexed
 
@@ -429,13 +453,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 10.1 k triangles | 4.51 ms, 2.2 M/s | 4.25 ms, 2.4 M/s | 0.94 | 0.9% / 0.2% | 0.94 to 0.94 |
-| nav_test.obj | 1612 triangles | 3.06 ms, 526.2 k/s | 2.82 ms, 572.5 k/s | 0.92 | 0.3% / 0.3% | 0.92 to 0.92 |
-| undulating.obj | 5202 triangles | 3.60 ms, 1.4 M/s | 3.41 ms, 1.5 M/s | 0.95 | 0.7% / 0.4% | 0.94 to 0.96 |
-| terrain 256 m | 130.1 k triangles | 32.03 ms, 4.1 M/s | 30.33 ms, 4.3 M/s | 0.95 | 0.6% / 2.0% | 0.94 to 0.95 |
-| terrain 256 m, 64 m tiles | 136.3 k triangles | 89.77 ms, 1.5 M/s | 80.56 ms, 1.7 M/s | 0.90 | 0.6% / 0.4% | 0.90 to 0.90 |
-| vale 256 m, 64 m tiles | 137.3 k triangles | 86.96 ms, 1.6 M/s | 78.14 ms, 1.8 M/s | 0.90 | 0.3% / 0.3% | 0.90 to 0.90 |
-| vale 1 km, 64 m tiles | 2.22 M triangles | 1441.40 ms, 1.5 M/s | 1294.81 ms, 1.7 M/s | 0.90 | 2.9% / 2.9% | 0.90 to 0.90 |
+| dungeon.obj | 10.1 k triangles | 4.48 ms, 2.3 M/s | 4.30 ms, 2.4 M/s | 0.96 | 0.8% / 0.6% | 0.95 to 0.96 |
+| nav_test.obj | 1612 triangles | 3.08 ms, 523.1 k/s | 2.85 ms, 565.2 k/s | 0.93 | 1.2% / 4.5% | 0.93 to 0.93 |
+| undulating.obj | 5202 triangles | 3.61 ms, 1.4 M/s | 3.44 ms, 1.5 M/s | 0.95 | 0.3% / 0.7% | 0.95 to 0.95 |
+| terrain 256 m | 130.1 k triangles | 32.20 ms, 4.0 M/s | 30.59 ms, 4.3 M/s | 0.95 | 1.5% / 2.4% | 0.95 to 0.95 |
+| terrain 256 m, 64 m tiles | 136.3 k triangles | 90.05 ms, 1.5 M/s | 80.91 ms, 1.7 M/s | 0.90 | 0.6% / 0.5% | 0.90 to 0.90 |
+| vale 256 m, 64 m tiles | 137.3 k triangles | 87.26 ms, 1.6 M/s | 78.58 ms, 1.7 M/s | 0.90 | 1.5% / 1.1% | 0.90 to 0.90 |
+| vale 1 km, 64 m tiles | 2.22 M triangles | 1406.99 ms, 1.6 M/s | 1266.11 ms, 1.8 M/s | 0.90 | 0.5% / 0.4% | 0.90 to 0.90 |
 
 ### Rasterization, one triangle at a time
 
@@ -443,13 +467,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 10.1 k triangles | 4.53 ms, 2.2 M/s | 4.26 ms, 2.4 M/s | 0.94 | 0.8% / 0.5% | 0.94 to 0.94 |
-| nav_test.obj | 1612 triangles | 3.07 ms, 524.6 k/s | 2.82 ms, 571.8 k/s | 0.92 | 0.4% / 0.3% | 0.92 to 0.92 |
-| undulating.obj | 5202 triangles | 3.61 ms, 1.4 M/s | 3.40 ms, 1.5 M/s | 0.94 | 0.9% / 0.5% | 0.94 to 0.94 |
-| terrain 256 m | 130.1 k triangles | 31.50 ms, 4.1 M/s | 29.47 ms, 4.4 M/s | 0.94 | 0.8% / 1.6% | 0.93 to 0.94 |
-| terrain 256 m, 64 m tiles | 136.3 k triangles | 90.07 ms, 1.5 M/s | 80.70 ms, 1.7 M/s | 0.90 | 0.2% / 0.3% | 0.89 to 0.90 |
-| vale 256 m, 64 m tiles | 137.3 k triangles | 87.90 ms, 1.6 M/s | 78.73 ms, 1.7 M/s | 0.90 | 0.4% / 0.4% | 0.89 to 0.90 |
-| vale 1 km, 64 m tiles | 2.22 M triangles | 1453.47 ms, 1.5 M/s | 1299.62 ms, 1.7 M/s | 0.89 | 2.7% / 2.7% | 0.89 to 0.89 |
+| dungeon.obj | 10.1 k triangles | 4.54 ms, 2.2 M/s | 4.35 ms, 2.3 M/s | 0.96 | 3.2% / 4.3% | 0.96 to 0.96 |
+| nav_test.obj | 1612 triangles | 3.07 ms, 524.5 k/s | 2.85 ms, 566.5 k/s | 0.93 | 0.3% / 0.8% | 0.92 to 0.93 |
+| undulating.obj | 5202 triangles | 3.61 ms, 1.4 M/s | 3.43 ms, 1.5 M/s | 0.95 | 0.8% / 0.8% | 0.95 to 0.95 |
+| terrain 256 m | 130.1 k triangles | 31.66 ms, 4.1 M/s | 29.85 ms, 4.4 M/s | 0.94 | 2.4% / 1.8% | 0.94 to 0.94 |
+| terrain 256 m, 64 m tiles | 136.3 k triangles | 90.28 ms, 1.5 M/s | 80.98 ms, 1.7 M/s | 0.90 | 0.6% / 0.5% | 0.90 to 0.90 |
+| vale 256 m, 64 m tiles | 137.3 k triangles | 88.15 ms, 1.6 M/s | 79.03 ms, 1.7 M/s | 0.90 | 0.8% / 0.5% | 0.89 to 0.90 |
+| vale 1 km, 64 m tiles | 2.22 M triangles | 1424.51 ms, 1.6 M/s | 1277.06 ms, 1.7 M/s | 0.90 | 1.1% / 0.6% | 0.89 to 0.90 |
 
 ### Adding spans, the rasterized field's again
 
@@ -457,13 +481,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 52.1 k spans | 296.4 µs, 175.8 M/s | 216.4 µs, 240.8 M/s | 0.73 | 1.3% / 6.9% | 0.73 to 0.73 |
-| nav_test.obj | 120.2 k spans | 665.1 µs, 180.7 M/s | 489.2 µs, 245.7 M/s | 0.74 | 1.7% / 2.5% | 0.73 to 0.75 |
-| undulating.obj | 108.7 k spans | 528.1 µs, 205.8 M/s | 357.1 µs, 304.4 M/s | 0.68 | 3.4% / 6.2% | 0.67 to 0.68 |
-| terrain 256 m | 741.4 k spans | 4.04 ms, 183.4 M/s | 2.85 ms, 260.4 M/s | 0.70 | 8.7% / 19.5% | 0.70 to 0.74 |
-| terrain 256 m, 64 m tiles | 4.41 M spans | 16.81 ms, 262.3 M/s | 10.07 ms, 437.6 M/s | 0.60 | 1.3% / 2.1% | 0.60 to 0.60 |
-| vale 256 m, 64 m tiles | 4.34 M spans | 16.40 ms, 264.8 M/s | 9.73 ms, 446.3 M/s | 0.59 | 0.7% / 1.2% | 0.59 to 0.61 |
-| vale 1 km, 64 m tiles | 70.09 M spans | 272.60 ms, 257.1 M/s | 163.32 ms, 429.2 M/s | 0.60 | 3.7% / 5.0% | 0.59 to 0.60 |
+| dungeon.obj | 52.1 k spans | 297.2 µs, 175.3 M/s | 219.1 µs, 237.9 M/s | 0.74 | 7.3% / 2.6% | 0.73 to 0.74 |
+| nav_test.obj | 120.2 k spans | 662.1 µs, 181.5 M/s | 492.4 µs, 244.1 M/s | 0.74 | 3.7% / 2.7% | 0.73 to 0.74 |
+| undulating.obj | 108.7 k spans | 542.5 µs, 200.4 M/s | 356.7 µs, 304.7 M/s | 0.66 | 8.5% / 9.2% | 0.66 to 0.67 |
+| terrain 256 m | 741.4 k spans | 3.93 ms, 188.6 M/s | 2.83 ms, 261.6 M/s | 0.72 | 7.5% / 7.3% | 0.69 to 0.74 |
+| terrain 256 m, 64 m tiles | 4.41 M spans | 17.05 ms, 258.5 M/s | 9.73 ms, 453.1 M/s | 0.57 | 2.8% / 1.7% | 0.57 to 0.58 |
+| vale 256 m, 64 m tiles | 4.34 M spans | 16.52 ms, 262.9 M/s | 9.41 ms, 461.4 M/s | 0.57 | 2.5% / 5.5% | 0.57 to 0.57 |
+| vale 1 km, 64 m tiles | 70.09 M spans | 268.75 ms, 260.8 M/s | 153.58 ms, 456.4 M/s | 0.57 | 1.3% / 1.5% | 0.57 to 0.57 |
 
 ### Polygon mesh copy
 
@@ -471,13 +495,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 118 polygons | 28.8 µs, 4.1 M/s | 29.4 µs, 4.0 M/s | 1.02 | 4.7% / 17.9% | 1.01 to 1.03 |
-| nav_test.obj | 155 polygons | 49.9 µs, 3.1 M/s | 50.1 µs, 3.1 M/s | 1.00 | 7.6% / 2.3% | 1.00 to 1.02 |
-| undulating.obj | 216 polygons | 49.1 µs, 4.4 M/s | 48.8 µs, 4.4 M/s | 1.00 | 86.7% / 19.6% | 1.00 to 1.01 |
-| terrain 256 m | 2580 polygons | 347.4 µs, 7.4 M/s | 352.0 µs, 7.3 M/s | 1.01 | 42.7% / 50.3% | 0.96 to 1.08 |
-| terrain 256 m, 64 m tiles | 4098 polygons | 27.8 µs, 147.4 M/s | 25.7 µs, 159.5 M/s | 0.92 | 4.3% / 5.0% | 0.90 to 0.92 |
-| vale 256 m, 64 m tiles | 108 polygons | 27.1 µs, 4.0 M/s | 23.7 µs, 4.6 M/s | 0.87 | 8.8% / 7.4% | 0.86 to 0.88 |
-| vale 1 km, 64 m tiles | 684 polygons | 534.6 µs, 1.3 M/s | 453.7 µs, 1.5 M/s | 0.85 | 15.3% / 23.7% | 0.83 to 0.90 |
+| dungeon.obj | 118 polygons | 27.3 µs, 4.3 M/s | 27.5 µs, 4.3 M/s | 1.01 | 31.0% / 17.4% | 0.99 to 1.05 |
+| nav_test.obj | 155 polygons | 48.9 µs, 3.2 M/s | 50.0 µs, 3.1 M/s | 1.02 | 11.5% / 24.5% | 1.02 to 1.02 |
+| undulating.obj | 216 polygons | 46.0 µs, 4.7 M/s | 46.0 µs, 4.7 M/s | 1.00 | 25.0% / 102.7% | 0.99 to 1.00 |
+| terrain 256 m | 2580 polygons | 366.6 µs, 7.0 M/s | 389.0 µs, 6.6 M/s | 1.06 | 28.0% / 28.6% | 1.01 to 1.21 |
+| terrain 256 m, 64 m tiles | 4098 polygons | 27.3 µs, 150.4 M/s | 25.6 µs, 160.2 M/s | 0.94 | 7.2% / 4.4% | 0.93 to 0.95 |
+| vale 256 m, 64 m tiles | 108 polygons | 27.3 µs, 4.0 M/s | 25.6 µs, 4.2 M/s | 0.94 | 14.2% / 11.3% | 0.93 to 0.97 |
+| vale 1 km, 64 m tiles | 684 polygons | 431.2 µs, 1.6 M/s | 382.7 µs, 1.8 M/s | 0.89 | 6.2% / 6.3% | 0.89 to 0.91 |
 
 ### Heightfield layers
 
@@ -485,13 +509,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 609.0 µs, 38.7 M/s | 592.1 µs, 39.8 M/s | 0.97 | 18.5% / 28.6% | 0.97 to 0.98 |
-| nav_test.obj | 56.8 k compact spans | 1.08 ms, 52.6 M/s | 1.06 ms, 53.7 M/s | 0.98 | 1.2% / 2.1% | 0.97 to 0.98 |
-| undulating.obj | 105.8 k compact spans | 1.52 ms, 69.6 M/s | 1.45 ms, 72.8 M/s | 0.96 | 2.0% / 3.1% | 0.95 to 0.99 |
+| dungeon.obj | 23.6 k compact spans | 592.4 µs, 39.8 M/s | 577.8 µs, 40.8 M/s | 0.98 | 2.3% / 2.5% | 0.96 to 0.99 |
+| nav_test.obj | 56.8 k compact spans | 1.08 ms, 52.4 M/s | 1.05 ms, 54.2 M/s | 0.97 | 1.7% / 1.7% | 0.97 to 0.97 |
+| undulating.obj | 105.8 k compact spans | 1.54 ms, 68.7 M/s | 1.46 ms, 72.5 M/s | 0.95 | 1.6% / 3.1% | 0.94 to 0.95 |
 | terrain 256 m | 686.7 k compact spans | fails | fails | | | |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 55.31 ms, 74.0 M/s | 53.18 ms, 77.0 M/s | 0.96 | 1.2% / 2.3% | 0.96 to 0.96 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 52.51 ms, 82.1 M/s | 49.32 ms, 87.4 M/s | 0.94 | 4.3% / 0.7% | 0.93 to 0.95 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 822.34 ms, 84.6 M/s | 774.27 ms, 89.8 M/s | 0.94 | 0.6% / 1.4% | 0.84 to 0.95 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 55.58 ms, 73.7 M/s | 53.58 ms, 76.4 M/s | 0.96 | 5.6% / 2.6% | 0.96 to 0.96 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 51.05 ms, 84.4 M/s | 49.18 ms, 87.6 M/s | 0.96 | 1.4% / 2.8% | 0.95 to 0.97 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 815.71 ms, 85.3 M/s | 776.35 ms, 89.6 M/s | 0.95 | 1.0% / 0.6% | 0.95 to 0.96 |
 
 ### Monotone regions
 
@@ -499,13 +523,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 319.3 µs, 73.8 M/s | 284.1 µs, 83.0 M/s | 0.89 | 6.9% / 40.0% | 0.88 to 0.90 |
-| nav_test.obj | 56.8 k compact spans | 660.9 µs, 85.9 M/s | 520.4 µs, 109.1 M/s | 0.79 | 21.7% / 14.4% | 0.79 to 0.80 |
-| undulating.obj | 105.8 k compact spans | 955.4 µs, 110.7 M/s | 767.6 µs, 137.8 M/s | 0.80 | 1.1% / 2.3% | 0.72 to 0.81 |
-| terrain 256 m | 686.7 k compact spans | 20.22 ms, 34.0 M/s | 7.92 ms, 86.7 M/s | 0.39 | 1.0% / 4.9% | 0.39 to 0.39 |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 33.38 ms, 122.7 M/s | 25.50 ms, 160.6 M/s | 0.76 | 1.3% / 0.9% | 0.76 to 0.77 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 28.02 ms, 153.8 M/s | 22.11 ms, 194.9 M/s | 0.79 | 1.2% / 1.0% | 0.77 to 0.80 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 463.52 ms, 150.1 M/s | 364.64 ms, 190.8 M/s | 0.79 | 2.4% / 3.0% | 0.78 to 0.80 |
+| dungeon.obj | 23.6 k compact spans | 313.0 µs, 75.3 M/s | 266.2 µs, 88.5 M/s | 0.85 | 2.4% / 3.2% | 0.83 to 0.85 |
+| nav_test.obj | 56.8 k compact spans | 654.4 µs, 86.8 M/s | 523.1 µs, 108.6 M/s | 0.80 | 3.7% / 2.4% | 0.79 to 0.81 |
+| undulating.obj | 105.8 k compact spans | 960.9 µs, 110.1 M/s | 782.3 µs, 135.2 M/s | 0.81 | 1.8% / 5.6% | 0.81 to 0.82 |
+| terrain 256 m | 686.7 k compact spans | 20.14 ms, 34.1 M/s | 7.95 ms, 86.4 M/s | 0.39 | 0.9% / 9.5% | 0.39 to 0.40 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 33.48 ms, 122.3 M/s | 26.08 ms, 157.0 M/s | 0.78 | 0.8% / 3.6% | 0.77 to 0.78 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 28.12 ms, 153.3 M/s | 22.54 ms, 191.2 M/s | 0.80 | 1.7% / 2.1% | 0.79 to 0.81 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 459.89 ms, 151.2 M/s | 367.95 ms, 189.0 M/s | 0.80 | 0.6% / 2.8% | 0.80 to 0.80 |
 
 ### Layer regions
 
@@ -513,13 +537,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 363.4 µs, 64.9 M/s | 355.1 µs, 66.4 M/s | 0.98 | 3.2% / 4.2% | 0.98 to 0.98 |
-| nav_test.obj | 56.8 k compact spans | 788.9 µs, 72.0 M/s | 716.2 µs, 79.3 M/s | 0.91 | 1.5% / 7.2% | 0.90 to 0.92 |
-| undulating.obj | 105.8 k compact spans | 1.21 ms, 87.3 M/s | 1.18 ms, 89.5 M/s | 0.98 | 1.3% / 2.3% | 0.97 to 1.04 |
-| terrain 256 m | 686.7 k compact spans | 8.82 ms, 77.9 M/s | 8.13 ms, 84.4 M/s | 0.92 | 7.3% / 1.3% | 0.92 to 0.93 |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 46.22 ms, 88.6 M/s | 43.63 ms, 93.9 M/s | 0.94 | 0.7% / 0.5% | 0.94 to 0.94 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 45.67 ms, 94.4 M/s | 44.94 ms, 95.9 M/s | 0.98 | 0.9% / 0.8% | 0.97 to 0.98 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 754.09 ms, 92.2 M/s | 735.64 ms, 94.6 M/s | 0.98 | 4.8% / 2.8% | 0.97 to 0.99 |
+| dungeon.obj | 23.6 k compact spans | 363.4 µs, 64.9 M/s | 344.7 µs, 68.4 M/s | 0.95 | 2.6% / 5.2% | 0.94 to 0.95 |
+| nav_test.obj | 56.8 k compact spans | 791.4 µs, 71.8 M/s | 718.2 µs, 79.1 M/s | 0.91 | 0.9% / 0.7% | 0.90 to 0.91 |
+| undulating.obj | 105.8 k compact spans | 1.22 ms, 86.9 M/s | 1.18 ms, 89.5 M/s | 0.97 | 1.7% / 1.4% | 0.97 to 0.98 |
+| terrain 256 m | 686.7 k compact spans | 8.61 ms, 79.7 M/s | 7.92 ms, 86.7 M/s | 0.92 | 1.0% / 5.2% | 0.92 to 0.93 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 46.30 ms, 88.4 M/s | 43.63 ms, 93.8 M/s | 0.94 | 0.7% / 1.3% | 0.94 to 0.95 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 45.76 ms, 94.2 M/s | 45.08 ms, 95.6 M/s | 0.99 | 1.4% / 1.6% | 0.95 to 0.99 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 725.82 ms, 95.8 M/s | 721.01 ms, 96.5 M/s | 0.99 | 4.0% / 1.2% | 0.99 to 0.99 |
 
 ### Median area filter
 
@@ -527,13 +551,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 164.3 µs, 143.4 M/s | 167.4 µs, 140.8 M/s | 1.02 | 11.2% / 2.7% | 1.01 to 1.03 |
-| nav_test.obj | 56.8 k compact spans | 360.0 µs, 157.8 M/s | 359.7 µs, 157.9 M/s | 1.00 | 0.9% / 2.1% | 0.99 to 1.00 |
-| undulating.obj | 105.8 k compact spans | 659.9 µs, 160.3 M/s | 659.8 µs, 160.3 M/s | 1.00 | 0.8% / 1.2% | 1.00 to 1.00 |
-| terrain 256 m | 686.7 k compact spans | 4.25 ms, 161.6 M/s | 4.27 ms, 161.0 M/s | 1.00 | 1.4% / 0.4% | 1.00 to 1.01 |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 25.08 ms, 163.3 M/s | 25.10 ms, 163.1 M/s | 1.00 | 0.3% / 0.3% | 1.00 to 1.00 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 26.72 ms, 161.3 M/s | 26.75 ms, 161.1 M/s | 1.00 | 0.3% / 0.3% | 1.00 to 1.01 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 441.45 ms, 157.6 M/s | 442.31 ms, 157.3 M/s | 1.00 | 2.8% / 2.6% | 1.00 to 1.00 |
+| dungeon.obj | 23.6 k compact spans | 163.4 µs, 144.2 M/s | 172.5 µs, 136.7 M/s | 1.06 | 2.4% / 0.9% | 1.05 to 1.06 |
+| nav_test.obj | 56.8 k compact spans | 358.6 µs, 158.4 M/s | 363.0 µs, 156.5 M/s | 1.01 | 2.8% / 3.1% | 1.01 to 1.02 |
+| undulating.obj | 105.8 k compact spans | 660.2 µs, 160.2 M/s | 661.8 µs, 159.9 M/s | 1.00 | 1.2% / 1.3% | 1.00 to 1.00 |
+| terrain 256 m | 686.7 k compact spans | 4.29 ms, 160.2 M/s | 4.28 ms, 160.5 M/s | 1.00 | 1.2% / 1.7% | 1.00 to 1.00 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 25.09 ms, 163.2 M/s | 25.18 ms, 162.6 M/s | 1.00 | 0.8% / 0.5% | 1.00 to 1.00 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 26.79 ms, 160.9 M/s | 26.77 ms, 161.0 M/s | 1.00 | 5.1% / 0.6% | 1.00 to 1.00 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 432.45 ms, 160.8 M/s | 432.85 ms, 160.7 M/s | 1.00 | 0.9% / 0.8% | 1.00 to 1.00 |
 
 ### Box area
 
@@ -541,13 +565,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 15.5 µs, 1.52 G/s | 12.5 µs, 1.88 G/s | 0.81 | 5.9% / 5.0% | 0.79 to 0.82 |
-| nav_test.obj | 56.8 k compact spans | 27.2 µs, 2.09 G/s | 25.5 µs, 2.22 G/s | 0.94 | 2.6% / 3.0% | 0.92 to 0.94 |
-| undulating.obj | 105.8 k compact spans | 27.9 µs, 3.79 G/s | 25.1 µs, 4.21 G/s | 0.90 | 7.0% / 13.8% | 0.90 to 0.90 |
-| terrain 256 m | 686.7 k compact spans | 173.6 µs, 3.96 G/s | 153.4 µs, 4.48 G/s | 0.88 | 14.5% / 2.1% | 0.84 to 0.94 |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 909.4 µs, 4.50 G/s | 789.0 µs, 5.19 G/s | 0.87 | 6.1% / 2.1% | 0.86 to 0.88 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 795.7 µs, 5.42 G/s | 674.6 µs, 6.39 G/s | 0.85 | 1.4% / 2.0% | 0.79 to 0.86 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 12.86 ms, 5.41 G/s | 11.16 ms, 6.23 G/s | 0.87 | 0.6% / 2.5% | 0.85 to 0.87 |
+| dungeon.obj | 23.6 k compact spans | 16.1 µs, 1.47 G/s | 12.7 µs, 1.85 G/s | 0.79 | 12.3% / 6.7% | 0.79 to 0.82 |
+| nav_test.obj | 56.8 k compact spans | 26.3 µs, 2.16 G/s | 25.2 µs, 2.25 G/s | 0.96 | 7.8% / 16.6% | 0.94 to 0.98 |
+| undulating.obj | 105.8 k compact spans | 29.7 µs, 3.57 G/s | 24.5 µs, 4.32 G/s | 0.83 | 3.6% / 7.5% | 0.82 to 0.87 |
+| terrain 256 m | 686.7 k compact spans | 162.5 µs, 4.23 G/s | 152.3 µs, 4.51 G/s | 0.94 | 2.8% / 17.6% | 0.93 to 0.94 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 904.3 µs, 4.53 G/s | 783.8 µs, 5.22 G/s | 0.87 | 7.5% / 2.9% | 0.84 to 0.87 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 791.3 µs, 5.45 G/s | 674.8 µs, 6.39 G/s | 0.85 | 1.5% / 1.5% | 0.85 to 0.86 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 12.82 ms, 5.43 G/s | 11.05 ms, 6.30 G/s | 0.86 | 1.1% / 0.9% | 0.85 to 0.86 |
 
 ### Convex area
 
@@ -555,13 +579,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 21.4 µs, 1.10 G/s | 18.7 µs, 1.26 G/s | 0.87 | 1.8% / 0.7% | 0.87 to 0.88 |
-| nav_test.obj | 56.8 k compact spans | 56.9 µs, 997.3 M/s | 48.2 µs, 1.18 G/s | 0.85 | 2.8% / 7.7% | 0.84 to 0.85 |
-| undulating.obj | 105.8 k compact spans | 97.5 µs, 1.09 G/s | 82.0 µs, 1.29 G/s | 0.84 | 3.5% / 0.4% | 0.84 to 0.84 |
-| terrain 256 m | 686.7 k compact spans | 613.2 µs, 1.12 G/s | 516.8 µs, 1.33 G/s | 0.84 | 0.6% / 1.1% | 0.83 to 0.85 |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 3.83 ms, 1.07 G/s | 3.19 ms, 1.28 G/s | 0.83 | 0.8% / 0.7% | 0.83 to 0.85 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 3.93 ms, 1.10 G/s | 3.28 ms, 1.31 G/s | 0.84 | 0.3% / 0.7% | 0.82 to 0.84 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 64.70 ms, 1.08 G/s | 53.92 ms, 1.29 G/s | 0.83 | 2.3% / 2.5% | 0.83 to 0.84 |
+| dungeon.obj | 23.6 k compact spans | 21.9 µs, 1.08 G/s | 18.9 µs, 1.25 G/s | 0.86 | 13.5% / 3.7% | 0.86 to 0.87 |
+| nav_test.obj | 56.8 k compact spans | 57.9 µs, 980.6 M/s | 48.7 µs, 1.17 G/s | 0.84 | 4.7% / 2.1% | 0.84 to 0.85 |
+| undulating.obj | 105.8 k compact spans | 97.8 µs, 1.08 G/s | 82.4 µs, 1.28 G/s | 0.84 | 0.6% / 0.9% | 0.84 to 0.84 |
+| terrain 256 m | 686.7 k compact spans | 616.5 µs, 1.11 G/s | 516.2 µs, 1.33 G/s | 0.84 | 2.5% / 1.5% | 0.84 to 0.84 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 3.84 ms, 1.07 G/s | 3.19 ms, 1.29 G/s | 0.83 | 1.4% / 0.8% | 0.83 to 0.83 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 3.94 ms, 1.10 G/s | 3.28 ms, 1.31 G/s | 0.83 | 2.1% / 0.8% | 0.83 to 0.83 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 62.73 ms, 1.11 G/s | 52.39 ms, 1.33 G/s | 0.84 | 0.3% / 0.5% | 0.84 to 0.84 |
 
 ### Cylinder area
 
@@ -569,13 +593,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 23.6 k compact spans | 23.3 µs, 1.01 G/s | 18.7 µs, 1.26 G/s | 0.80 | 3.2% / 5.5% | 0.78 to 0.80 |
-| nav_test.obj | 56.8 k compact spans | 30.5 µs, 1.86 G/s | 25.6 µs, 2.22 G/s | 0.84 | 18.5% / 20.8% | 0.84 to 0.88 |
-| undulating.obj | 105.8 k compact spans | 39.8 µs, 2.66 G/s | 31.9 µs, 3.32 G/s | 0.80 | 15.9% / 8.8% | 0.79 to 0.81 |
-| terrain 256 m | 686.7 k compact spans | 240.4 µs, 2.86 G/s | 189.3 µs, 3.63 G/s | 0.79 | 1.2% / 7.9% | 0.78 to 0.79 |
-| terrain 256 m, 64 m tiles | 4.09 M compact spans | 1.40 ms, 2.92 G/s | 1.10 ms, 3.72 G/s | 0.79 | 1.4% / 2.0% | 0.78 to 0.80 |
-| vale 256 m, 64 m tiles | 4.31 M compact spans | 1.23 ms, 3.50 G/s | 1.04 ms, 4.15 G/s | 0.84 | 7.5% / 13.7% | 0.84 to 0.85 |
-| vale 1 km, 64 m tiles | 69.56 M compact spans | 19.52 ms, 3.56 G/s | 16.53 ms, 4.21 G/s | 0.85 | 1.1% / 0.7% | 0.84 to 0.86 |
+| dungeon.obj | 23.6 k compact spans | 23.0 µs, 1.02 G/s | 18.5 µs, 1.27 G/s | 0.80 | 3.2% / 9.1% | 0.78 to 0.80 |
+| nav_test.obj | 56.8 k compact spans | 30.7 µs, 1.85 G/s | 24.4 µs, 2.32 G/s | 0.80 | 4.4% / 4.1% | 0.80 to 0.81 |
+| undulating.obj | 105.8 k compact spans | 41.7 µs, 2.54 G/s | 31.1 µs, 3.40 G/s | 0.75 | 12.2% / 2.4% | 0.74 to 0.79 |
+| terrain 256 m | 686.7 k compact spans | 241.4 µs, 2.84 G/s | 186.1 µs, 3.69 G/s | 0.77 | 4.9% / 2.8% | 0.76 to 0.79 |
+| terrain 256 m, 64 m tiles | 4.09 M compact spans | 1.39 ms, 2.95 G/s | 1.09 ms, 3.75 G/s | 0.79 | 1.9% / 1.6% | 0.78 to 0.79 |
+| vale 256 m, 64 m tiles | 4.31 M compact spans | 1.21 ms, 3.55 G/s | 1.03 ms, 4.20 G/s | 0.84 | 3.5% / 1.8% | 0.82 to 0.85 |
+| vale 1 km, 64 m tiles | 69.56 M compact spans | 19.44 ms, 3.58 G/s | 16.28 ms, 4.27 G/s | 0.84 | 1.6% / 0.8% | 0.83 to 0.84 |
 
 ### Polygon mesh merge, every tile
 
@@ -583,9 +607,9 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| terrain 256 m, 64 m tiles | 4098 polygons | 257.1 µs, 15.9 M/s | 264.3 µs, 15.5 M/s | 1.03 | 2.9% / 2.9% | 1.02 to 1.03 |
-| vale 256 m, 64 m tiles | 108 polygons | 8.9 µs, 12.2 M/s | 9.7 µs, 11.2 M/s | 1.09 | 20.7% / 21.9% | 1.09 to 1.11 |
-| vale 1 km, 64 m tiles | 684 polygons | 46.2 µs, 14.8 M/s | 47.4 µs, 14.4 M/s | 1.03 | 36.5% / 59.9% | 0.98 to 1.18 |
+| terrain 256 m, 64 m tiles | 4098 polygons | 257.5 µs, 15.9 M/s | 260.5 µs, 15.7 M/s | 1.01 | 2.3% / 2.3% | 1.01 to 1.02 |
+| vale 256 m, 64 m tiles | 108 polygons | 9.0 µs, 12.0 M/s | 10.1 µs, 10.7 M/s | 1.12 | 16.6% / 20.5% | 1.05 to 1.17 |
+| vale 1 km, 64 m tiles | 684 polygons | 51.2 µs, 13.4 M/s | 50.0 µs, 13.7 M/s | 0.98 | 28.3% / 40.3% | 0.94 to 1.12 |
 
 ### Detail mesh merge, every tile
 
@@ -593,9 +617,9 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| terrain 256 m, 64 m tiles | 4098 polygons | 39.3 µs, 104.2 M/s | 18.1 µs, 227.0 M/s | 0.46 | 14.9% / 50.6% | 0.45 to 0.49 |
-| vale 256 m, 64 m tiles | 108 polygons | 8.7 µs, 12.3 M/s | 3.8 µs, 28.2 M/s | 0.44 | 69.7% / 54.5% | 0.42 to 0.49 |
-| vale 1 km, 64 m tiles | 684 polygons | 146.2 µs, 4.7 M/s | 80.3 µs, 8.5 M/s | 0.55 | 12.5% / 17.7% | 0.53 to 0.55 |
+| terrain 256 m, 64 m tiles | 4098 polygons | 40.6 µs, 100.9 M/s | 20.0 µs, 204.6 M/s | 0.49 | 11.0% / 36.6% | 0.48 to 0.49 |
+| vale 256 m, 64 m tiles | 108 polygons | 10.0 µs, 10.8 M/s | 4.8 µs, 22.3 M/s | 0.48 | 21.8% / 65.9% | 0.48 to 0.49 |
+| vale 1 km, 64 m tiles | 684 polygons | 147.7 µs, 4.6 M/s | 76.5 µs, 8.9 M/s | 0.52 | 16.1% / 36.9% | 0.52 to 0.54 |
 
 ### Bounds
 
@@ -603,13 +627,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 5101 vertices | 10.5 µs, 485.8 M/s | 2.9 µs, 1.78 G/s | 0.27 | 0.5% / 2.1% | 0.27 to 0.27 |
-| nav_test.obj | 884 vertices | 1.9 µs, 466.7 M/s | 0.6 µs, 1.60 G/s | 0.29 | 4.2% / 7.3% | 0.29 to 0.30 |
-| undulating.obj | 2800 vertices | 5.9 µs, 478.6 M/s | 1.6 µs, 1.74 G/s | 0.28 | 0.7% / 3.1% | 0.28 to 0.28 |
-| terrain 256 m | 66.8 k vertices | 139.1 µs, 480.3 M/s | 37.5 µs, 1.78 G/s | 0.27 | 4.8% / 30.4% | 0.27 to 0.27 |
-| terrain 256 m, 64 m tiles | 66.8 k vertices | 138.5 µs, 482.2 M/s | 37.4 µs, 1.79 G/s | 0.27 | 0.7% / 2.4% | 0.27 to 0.27 |
-| vale 256 m, 64 m tiles | 66.0 k vertices | 137.0 µs, 481.9 M/s | 36.9 µs, 1.79 G/s | 0.27 | 0.9% / 11.8% | 0.27 to 0.28 |
-| vale 1 km, 64 m tiles | 1.05 M vertices | 2.18 ms, 482.3 M/s | 606.5 µs, 1.73 G/s | 0.28 | 5.2% / 23.2% | 0.28 to 0.29 |
+| dungeon.obj | 5101 vertices | 10.5 µs, 484.9 M/s | 2.9 µs, 1.77 G/s | 0.27 | 0.7% / 2.8% | 0.27 to 0.28 |
+| nav_test.obj | 884 vertices | 1.9 µs, 471.7 M/s | 0.6 µs, 1.60 G/s | 0.29 | 2.1% / 9.1% | 0.29 to 0.30 |
+| undulating.obj | 2800 vertices | 5.8 µs, 479.4 M/s | 1.6 µs, 1.74 G/s | 0.28 | 0.5% / 4.4% | 0.27 to 0.28 |
+| terrain 256 m | 66.8 k vertices | 139.2 µs, 479.8 M/s | 37.7 µs, 1.77 G/s | 0.27 | 1.7% / 4.1% | 0.27 to 0.27 |
+| terrain 256 m, 64 m tiles | 66.8 k vertices | 139.2 µs, 479.8 M/s | 37.7 µs, 1.77 G/s | 0.27 | 2.4% / 3.5% | 0.27 to 0.27 |
+| vale 256 m, 64 m tiles | 66.0 k vertices | 137.4 µs, 480.6 M/s | 37.2 µs, 1.78 G/s | 0.27 | 2.6% / 0.9% | 0.27 to 0.27 |
+| vale 1 km, 64 m tiles | 1.05 M vertices | 2.16 ms, 485.4 M/s | 596.9 µs, 1.76 G/s | 0.28 | 1.3% / 4.2% | 0.28 to 0.28 |
 
 ### Grid size
 
@@ -617,13 +641,13 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 10.0 k calls | 1.0 ns | 1.2 ns | 1.19 | 0.5% / 2.8% | 1.17 to 1.19 |
-| nav_test.obj | 10.0 k calls | 1.0 ns | 1.2 ns | 1.16 | 0.6% / 2.2% | 1.16 to 1.19 |
-| undulating.obj | 10.0 k calls | 1.0 ns | 1.2 ns | 1.16 | 6.5% / 5.4% | 1.16 to 1.19 |
-| terrain 256 m | 10.0 k calls | 1.0 ns | 1.2 ns | 1.20 | 1.8% / 5.2% | 1.19 to 1.20 |
-| terrain 256 m, 64 m tiles | 10.0 k calls | 1.0 ns | 1.2 ns | 1.19 | 0.7% / 3.2% | 1.17 to 1.20 |
-| vale 256 m, 64 m tiles | 10.0 k calls | 1.0 ns | 1.2 ns | 1.17 | 9.2% / 2.6% | 1.17 to 1.19 |
-| vale 1 km, 64 m tiles | 10.0 k calls | 1.0 ns | 1.2 ns | 1.18 | 5.2% / 4.7% | 1.18 to 1.19 |
+| dungeon.obj | 10.0 k calls | 1.0 ns | 1.2 ns | 1.17 | 0.8% / 2.5% | 1.17 to 1.17 |
+| nav_test.obj | 10.0 k calls | 1.0 ns | 1.2 ns | 1.17 | 1.0% / 2.7% | 1.17 to 1.17 |
+| undulating.obj | 10.0 k calls | 1.0 ns | 1.2 ns | 1.17 | 28.2% / 3.5% | 1.17 to 1.19 |
+| terrain 256 m | 10.0 k calls | 1.0 ns | 1.2 ns | 1.18 | 1.0% / 2.5% | 1.17 to 1.20 |
+| terrain 256 m, 64 m tiles | 10.0 k calls | 1.0 ns | 1.2 ns | 1.17 | 0.8% / 3.1% | 1.17 to 1.19 |
+| vale 256 m, 64 m tiles | 10.0 k calls | 1.0 ns | 1.2 ns | 1.19 | 0.6% / 18.7% | 1.19 to 1.20 |
+| vale 1 km, 64 m tiles | 10.0 k calls | 1.0 ns | 1.2 ns | 1.18 | 1.6% / 30.1% | 1.18 to 1.19 |
 
 ### Polygon offset, a hexagon
 
@@ -631,10 +655,10 @@ Every step of a navmesh build, in Loomwork's order.
 
 | input | work | original | port | port ÷ original | spread, original / port | port ÷ original, 3 runs |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dungeon.obj | 10.0 k calls | 34.7 ns | 26.5 ns | 0.76 | 4.9% / 1.3% | 0.76 to 0.77 |
-| nav_test.obj | 10.0 k calls | 34.9 ns | 26.6 ns | 0.76 | 1.4% / 1.8% | 0.76 to 0.76 |
-| undulating.obj | 10.0 k calls | 35.2 ns | 26.9 ns | 0.76 | 8.1% / 1.3% | 0.76 to 0.77 |
-| terrain 256 m | 10.0 k calls | 35.1 ns | 26.7 ns | 0.76 | 1.7% / 2.1% | 0.76 to 0.76 |
-| terrain 256 m, 64 m tiles | 10.0 k calls | 35.3 ns | 26.8 ns | 0.76 | 29.9% / 2.1% | 0.76 to 0.77 |
-| vale 256 m, 64 m tiles | 10.0 k calls | 35.0 ns | 26.7 ns | 0.76 | 4.7% / 1.6% | 0.76 to 0.77 |
-| vale 1 km, 64 m tiles | 10.0 k calls | 34.5 ns | 26.5 ns | 0.77 | 25.5% / 1.9% | 0.77 to 0.77 |
+| dungeon.obj | 10.0 k calls | 34.9 ns | 26.6 ns | 0.76 | 9.9% / 1.5% | 0.76 to 0.76 |
+| nav_test.obj | 10.0 k calls | 35.2 ns | 26.7 ns | 0.76 | 1.9% / 1.2% | 0.76 to 0.76 |
+| undulating.obj | 10.0 k calls | 35.0 ns | 26.9 ns | 0.77 | 0.8% / 1.9% | 0.76 to 0.77 |
+| terrain 256 m | 10.0 k calls | 35.3 ns | 26.8 ns | 0.76 | 2.5% / 1.4% | 0.76 to 0.76 |
+| terrain 256 m, 64 m tiles | 10.0 k calls | 35.1 ns | 26.7 ns | 0.76 | 0.9% / 0.9% | 0.76 to 0.76 |
+| vale 256 m, 64 m tiles | 10.0 k calls | 35.2 ns | 26.8 ns | 0.76 | 1.5% / 1.6% | 0.76 to 0.76 |
+| vale 1 km, 64 m tiles | 10.0 k calls | 34.5 ns | 26.7 ns | 0.77 | 1.4% / 3.0% | 0.77 to 0.77 |

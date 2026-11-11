@@ -34,10 +34,10 @@ model) for Farhollow Games, and has not yet been reviewed by a person.
 ## Install
 
 ```sh
-zig fetch --save git+https://github.com/farhollowgames/zig-recast#v0.1.0
+zig fetch --save git+https://github.com/farhollowgames/zig-recast#v0.1.1
 ```
 
-`v0.1.0` is the latest release. Then, in `build.zig`:
+`v0.1.1` is the latest release. Then, in `build.zig`:
 
 ```zig
 const recast = b.dependency("recast", .{ .target = target, .optimize = optimize });
@@ -189,14 +189,14 @@ takes less time):
 
 | feature | port ÷ original |
 | --- | ---: |
-| Whole build | 0.37 to 0.91 |
-| Rasterization, int indices | 0.90 to 0.95 |
-| Distance field | 1.09 to 1.31 |
-| Watershed regions | 0.58 to 0.89 |
-| Detail mesh | 0.09 to 0.83 |
+| Whole build | 0.38 to 0.92 |
+| Rasterization, int indices | 0.90 to 0.96 |
+| Distance field | 1.09 to 1.30 |
+| Watershed regions | 0.58 to 0.93 |
+| Detail mesh | 0.09 to 0.76 |
 
 AMD Ryzen 9 9950X3D, one core, Linux 7.3.3, Zig 0.17.0 ReleaseFast against
-clang 22.1.8 `-O3`, at commit `0c37e46`, with a load average of 1.4 to 3.2
+clang 22.1.8 `-O3`, at commit `c14a021`, with a load average of at most 3.0
 on 32 hardware threads; the median of three runs.
 
 - [`doc/TESTING.md`](doc/TESTING.md): how the tests compare the port with
