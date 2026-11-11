@@ -1193,6 +1193,41 @@ fn push3(
     try queue.appendSlice(gpa, &[_]i32{ v1, v2, v3 });
 }
 
+/// Whether each span has a neighbor in another region, where the flood of
+/// a polygon's heights starts, worked out the first time a polygon asks:
+/// the polygons' patches overlap, and a span keeps its answer.
+const RegionBorders = struct {
+    /// Per span: 0 not known yet, 1 inside its region, 2 on its border.
+    known: []u8,
+
+    fn has(
+        borders: *RegionBorders,
+        chf: *const CompactHeightfield,
+        x: i32,
+        y: i32,
+        i: usize,
+    ) bool {
+        if (borders.known[i] == 0) {
+            const s = chf.spans[i];
+            var border = false;
+            for ([4]u2{ 0, 1, 2, 3 }) |dir| {
+                if (recast.getCon(s, dir) != recast.not_connected) {
+                    const ax = x + recast.getDirOffsetX(dir);
+                    const ay = y + recast.getDirOffsetY(dir);
+                    const neighbor_cell = chf.cells[@intCast(ax + ay * chf.width)];
+                    const ai = @as(i32, neighbor_cell.index) + recast.getCon(s, dir);
+                    if (chf.spans[@intCast(ai)].reg != s.reg) {
+                        border = true;
+                        break;
+                    }
+                }
+            }
+            borders.known[i] = if (border) 2 else 1;
+        }
+        return borders.known[i] == 2;
+    }
+};
+
 /// Fills the patch with the heights of the polygon's region, flooding out
 /// from the region's border, or from the polygon's center where the region
 /// has no span under the polygon or the polygon joins several regions.
@@ -1200,6 +1235,7 @@ fn getHeightData(
     ctx: Context,
     gpa: Allocator,
     chf: *const CompactHeightfield,
+    borders: *RegionBorders,
     poly: []const u16,
     npoly: i32,
     verts: []const u16,
@@ -1223,39 +1259,25 @@ fn getHeightData(
     if (region != recast.multiple_regs) {
         // Copy the height from the same region, and mark region borders
         // as seed points to fill the rest.
+        const cells = chf.cells;
+        const spans = chf.spans;
+        const data = hp.data;
         var hy: i32 = 0;
         while (hy < hp.height) : (hy += 1) {
             const y = hp.ymin + hy + bs;
             var hx: i32 = 0;
             while (hx < hp.width) : (hx += 1) {
                 const x = hp.xmin + hx + bs;
-                const c = chf.cells[@intCast(x + y * chf.width)];
-                var i: i32 = c.index;
-                const ni = i + c.count;
-                while (i < ni) : (i += 1) {
-                    const s = chf.spans[@intCast(i)];
+                const c = cells[@intCast(x + y * chf.width)];
+                for (c.index..@as(usize, c.index) + c.count) |i| {
+                    const s = spans[i];
                     if (s.reg == region) {
                         // Store height
-                        hp.data[@intCast(hx + hy * hp.width)] = s.y;
+                        data[@intCast(hx + hy * hp.width)] = s.y;
                         empty = false;
-
                         // If any of the neighbours is not in same region,
                         // add the current location as flood fill start
-                        var border = false;
-                        for ([4]u2{ 0, 1, 2, 3 }) |dir| {
-                            if (recast.getCon(s, dir) != recast.not_connected) {
-                                const ax = x + recast.getDirOffsetX(dir);
-                                const ay = y + recast.getDirOffsetY(dir);
-                                const neighbor_cell = chf.cells[@intCast(ax + ay * chf.width)];
-                                const ai = @as(i32, neighbor_cell.index) + recast.getCon(s, dir);
-                                const neighbor = chf.spans[@intCast(ai)];
-                                if (neighbor.reg != region) {
-                                    border = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (border) try push3(gpa, queue, x, y, i);
+                        if (borders.has(chf, x, y, i)) try push3(gpa, queue, x, y, @intCast(i));
                         break;
                     }
                 }
@@ -1362,6 +1384,9 @@ pub fn buildPolyMeshDetail(
     try samples.ensureTotalCapacity(gpa, 512);
     var search: SampleSearch = .{};
     defer search.deinit(gpa);
+    var borders: RegionBorders = .{ .known = try gpa.alloc(u8, @intCast(chf.span_count)) };
+    defer gpa.free(borders.known);
+    @memset(borders.known, 0);
     var verts: [256 * 3]f32 = undefined;
     var n_poly_verts: i32 = 0;
     var maxhw: i32 = 0;
@@ -1470,6 +1495,7 @@ pub fn buildPolyMeshDetail(
             ctx,
             gpa,
             chf,
+            &borders,
             p,
             npoly,
             pmesh.verts,
