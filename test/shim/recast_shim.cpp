@@ -135,6 +135,10 @@ void shim_log_reset(void* ctx) {
     ((rcContext*)ctx)->resetTimers();
 }
 
+void shim_log_reset_log(void* ctx) { ((rcContext*)ctx)->resetLog(); }
+
+void shim_log_reset_timers(void* ctx) { ((rcContext*)ctx)->resetTimers(); }
+
 void shim_log_timer(void* ctx, int label, int start) {
     if (start) {
         ((rcContext*)ctx)->startTimer((rcTimerLabel)label);

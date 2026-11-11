@@ -1213,6 +1213,27 @@ test "the context logs, cuts messages and times as the original's" {
     try logs.expectSame("disabled");
     const time = upstream.shim_log_accumulated(logs.original, 0);
     try testing.expectEqual(time, ctx.accumulatedTime(.total));
+    // Logging or timing on alone, and each reset alone.
+    for ([_][2]bool{ .{ true, false }, .{ false, true } }) |on| {
+        ctx.enableLog(on[0]);
+        ctx.enableTimer(on[1]);
+        upstream.shim_log_enable(logs.original, @intFromBool(on[0]), @intFromBool(on[1]));
+        ctx.log(.progress, "half", .{});
+        ctx.startTimer(.total);
+        ctx.stopTimer(.total);
+        ctx.resetLog();
+        ctx.log(.warning, "after", .{});
+        ctx.resetTimers();
+        upstream.shim_log_message(logs.original, 1, "half");
+        upstream.shim_log_timer(logs.original, 0, 1);
+        upstream.shim_log_timer(logs.original, 0, 0);
+        upstream.shim_log_reset_log(logs.original);
+        upstream.shim_log_message(logs.original, 2, "after");
+        upstream.shim_log_reset_timers(logs.original);
+        try logs.expectSame("half on");
+        const half_time = upstream.shim_log_accumulated(logs.original, 0);
+        try testing.expectEqual(half_time, ctx.accumulatedTime(.total));
+    }
     var none: recast.Context = .none;
     none.enableTimer(false);
     try testing.expectEqual(upstream.shim_default_accumulated(0, 0), none.accumulatedTime(.total));

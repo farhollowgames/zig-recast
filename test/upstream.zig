@@ -27,6 +27,8 @@ pub extern fn shim_log_text(log: *Log, len: *usize) [*]const u8;
 pub extern fn shim_log_clear(log: *Log) void;
 pub extern fn shim_log_message(log: *Log, category: c_int, text: [*:0]const u8) void;
 pub extern fn shim_log_reset(log: *Log) void;
+pub extern fn shim_log_reset_log(log: *Log) void;
+pub extern fn shim_log_reset_timers(log: *Log) void;
 pub extern fn shim_log_timer(log: *Log, label: c_int, start: c_int) void;
 pub extern fn shim_log_accumulated(log: *Log, label: c_int) c_int;
 pub extern fn shim_default_accumulated(label: c_int, timer: c_int) c_int;
