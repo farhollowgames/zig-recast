@@ -92,33 +92,6 @@ fn circumCircle(
     return false;
 }
 
-/// The vertical distance from `p` to the triangle, or `flt_max` if `p` is
-/// not over it.
-fn distPtTri(p: *const [3]f32, a: *const [3]f32, b: *const [3]f32, c: *const [3]f32) f32 {
-    const v0 = recast.vsub(c, a);
-    const v1 = recast.vsub(b, a);
-    const v2 = recast.vsub(p, a);
-
-    const dot00 = vdot2(&v0, &v0);
-    const dot01 = vdot2(&v0, &v1);
-    const dot02 = vdot2(&v0, &v2);
-    const dot11 = vdot2(&v1, &v1);
-    const dot12 = vdot2(&v1, &v2);
-
-    // Compute barycentric coordinates
-    const inv_denom = 1.0 / (dot00 * dot11 - dot01 * dot01);
-    const u = (dot11 * dot02 - dot01 * dot12) * inv_denom;
-    const v = (dot00 * dot12 - dot01 * dot02) * inv_denom;
-
-    // If point lies inside the triangle, return interpolated y-coord.
-    const eps: f32 = 1e-4;
-    if (u >= -eps and v >= -eps and (u + v) <= 1 + eps) {
-        const y = a[1] + v0[1] * u + v1[1] * v;
-        return @abs(y - p[1]);
-    }
-    return flt_max;
-}
-
 /// The squared distance from `pt` to the segment from `p` to `q`.
 fn distancePtSeg(pt: *const [3]f32, p: *const [3]f32, q: *const [3]f32) f32 {
     const pqx = q[0] - p[0];
@@ -165,20 +138,105 @@ fn distancePtSeg2d(pt: *const [3]f32, p: *const [3]f32, q: *const [3]f32) f32 {
     return dx * dx + dz * dz;
 }
 
-/// The smallest vertical distance from `p` to the triangles it is over, or
-/// -1 if it is over none.
-fn distToTriMesh(p: *const [3]f32, verts: []const f32, tris: []const i32, ntris: i32) f32 {
-    var dmin = flt_max;
-    for (0..@intCast(ntris)) |i| {
-        const va = point(verts, tris[i * 4 + 0]);
-        const vb = point(verts, tris[i * 4 + 1]);
-        const vc = point(verts, tris[i * 4 + 2]);
-        const d = distPtTri(p, va, vb, vc);
-        if (d < dmin) dmin = d;
-    }
-    if (dmin == flt_max) return -1;
-    return dmin;
+const lanes = std.simd.suggestVectorLength(f32) orelse 4;
+const Lanes = @Vector(lanes, f32);
+
+fn splat(x: f32) Lanes {
+    return @splat(x);
 }
+
+/// The interior samples of one polygon, placed where the error search
+/// measures them, and each one's least vertical distance to the
+/// triangulation, `lanes` samples at a time.
+const SampleSearch = struct {
+    /// Positions, jittered to get rid of some bad triangulations caused by
+    /// the grid's symmetry. Past the samples, to a whole number of lanes,
+    /// x is NaN, over no triangle.
+    xs: std.ArrayList(f32) = .empty,
+    ys: std.ArrayList(f32) = .empty,
+    zs: std.ArrayList(f32) = .empty,
+    /// The least distance per sample to the triangles it is over, or
+    /// `flt_max` if it is over none.
+    dmin: std.ArrayList(f32) = .empty,
+
+    fn deinit(search: *SampleSearch, gpa: Allocator) void {
+        search.xs.deinit(gpa);
+        search.ys.deinit(gpa);
+        search.zs.deinit(gpa);
+        search.dmin.deinit(gpa);
+    }
+
+    /// Places `samples`, each a cell x, height and z and a flag.
+    fn place(
+        search: *SampleSearch,
+        gpa: Allocator,
+        samples: []const i32,
+        sample_dist: f32,
+        cs: f32,
+        ch: f32,
+    ) Allocator.Error!void {
+        const n = samples.len / 4;
+        const padded = std.mem.alignForward(usize, n, lanes);
+        try search.xs.resize(gpa, padded);
+        try search.ys.resize(gpa, padded);
+        try search.zs.resize(gpa, padded);
+        try search.dmin.resize(gpa, padded);
+        for (0..n) |i| {
+            const s = samples[i * 4 ..][0..3];
+            const jitter: i32 = @intCast(i);
+            search.xs.items[i] =
+                @as(f32, @floatFromInt(s[0])) * sample_dist + getJitterX(jitter) * cs * 0.1;
+            search.ys.items[i] = @as(f32, @floatFromInt(s[1])) * ch;
+            search.zs.items[i] =
+                @as(f32, @floatFromInt(s[2])) * sample_dist + getJitterY(jitter) * cs * 0.1;
+        }
+        @memset(search.xs.items[n..], std.math.nan(f32));
+        @memset(search.ys.items[n..], 0);
+        @memset(search.zs.items[n..], 0);
+    }
+
+    fn position(search: *const SampleSearch, i: usize) [3]f32 {
+        return .{ search.xs.items[i], search.ys.items[i], search.zs.items[i] };
+    }
+
+    /// Sets each sample's least vertical distance to the triangles of
+    /// `tris` it is over: within a tolerance of its barycentric
+    /// coordinates, the distance to the height they interpolate, as
+    /// upstream's `distPtTri`, with what does not depend on the sample
+    /// worked out once per triangle.
+    fn measure(search: *SampleSearch, verts: []const f32, tris: []const i32) void {
+        const eps: f32 = 1e-4;
+        const dmin = search.dmin.items;
+        @memset(dmin, flt_max);
+        var t: usize = 0;
+        while (t < tris.len) : (t += 4) {
+            const a = point(verts, tris[t + 0]);
+            const b = point(verts, tris[t + 1]);
+            const c = point(verts, tris[t + 2]);
+            const v0 = recast.vsub(c, a);
+            const v1 = recast.vsub(b, a);
+            const dot00 = vdot2(&v0, &v0);
+            const dot01 = vdot2(&v0, &v1);
+            const dot11 = vdot2(&v1, &v1);
+            const inv_denom = 1.0 / (dot00 * dot11 - dot01 * dot01);
+
+            var k: usize = 0;
+            while (k < dmin.len) : (k += lanes) {
+                const v2x = @as(Lanes, search.xs.items[k..][0..lanes].*) - splat(a[0]);
+                const v2z = @as(Lanes, search.zs.items[k..][0..lanes].*) - splat(a[2]);
+                const dot02 = splat(v0[0]) * v2x + splat(v0[2]) * v2z;
+                const dot12 = splat(v1[0]) * v2x + splat(v1[2]) * v2z;
+                const u = (splat(dot11) * dot02 - splat(dot01) * dot12) * splat(inv_denom);
+                const v = (splat(dot00) * dot12 - splat(dot01) * dot02) * splat(inv_denom);
+                const inside = (u >= splat(-eps)) & (v >= splat(-eps)) & (u + v <= splat(1 + eps));
+                const y = splat(a[1]) + splat(v0[1]) * u + splat(v1[1]) * v;
+                const d = @abs(y - @as(Lanes, search.ys.items[k..][0..lanes].*));
+                const least: Lanes = dmin[k..][0..lanes].*;
+                dmin[k..][0..lanes].* = @select(f32, inside & (d < least), d, least);
+            }
+        }
+    }
+};
 
 /// The squared distance from `p` to the polygon's outline on the xz-plane,
 /// negative if `p` is inside.
@@ -713,6 +771,7 @@ fn buildPolyDetail(
     tris: *std.ArrayList(i32),
     edges: *std.ArrayList(i32),
     samples: *std.ArrayList(i32),
+    search: *SampleSearch,
 ) Allocator.Error!void {
     const max_verts = 127;
     // Max tris for delaunay is 2n-2-k (n=num verts, k=num hull verts).
@@ -907,41 +966,31 @@ fn buildPolyDetail(
         // Add the samples starting from the one that has the most
         // error. The procedure stops when all samples are added
         // or when the max error is within treshold.
-        const nsamples: i32 = @intCast(samples.items.len / 4);
-        var iter: i32 = 0;
-        while (iter < nsamples) : (iter += 1) {
+        const nsamples = samples.items.len / 4;
+        try search.place(gpa, samples.items, sample_dist, cs, chf.ch);
+        for (0..nsamples) |_| {
             if (nverts.* >= max_verts) break;
 
             // Find sample with most error.
-            var bestpt = [3]f32{ 0, 0, 0 };
+            search.measure(verts, tris.items);
             var bestd: f32 = 0;
-            var besti: i32 = -1;
-            i = 0;
-            while (i < nsamples) : (i += 1) {
-                const s = samples.items[@intCast(i * 4)..][0..4];
-                if (s[3] != 0) continue; // skip added.
-                var pt: [3]f32 = undefined;
-                // The sample location is jittered to get rid of some bad triangulations
-                // which are cause by symmetrical data from the grid structure.
-                pt[0] = @as(f32, @floatFromInt(s[0])) * sample_dist + getJitterX(i) * cs * 0.1;
-                pt[1] = @as(f32, @floatFromInt(s[1])) * chf.ch;
-                pt[2] = @as(f32, @floatFromInt(s[2])) * sample_dist + getJitterY(i) * cs * 0.1;
-                if (tris.items.len == 0) continue;
-                const ntris_now: i32 = @intCast(tris.items.len / 4);
-                const d = distToTriMesh(&pt, verts, tris.items, ntris_now);
-                if (d < 0) continue; // did not hit the mesh.
+            var besti: ?usize = null;
+            for (0..nsamples) |k| {
+                if (samples.items[k * 4 + 3] != 0) continue; // skip added.
+                const d = search.dmin.items[k];
+                if (d == flt_max) continue; // did not hit the mesh.
                 if (d > bestd) {
                     bestd = d;
-                    besti = i;
-                    bestpt = pt;
+                    besti = k;
                 }
             }
             // If the max error is within accepted threshold, stop tesselating.
-            if (bestd <= sample_max_error or besti == -1) break;
+            if (bestd <= sample_max_error) break;
+            const best = besti orelse break;
             // Mark sample as added.
-            samples.items[@intCast(besti * 4 + 3)] = 1;
+            samples.items[best * 4 + 3] = 1;
             // Add the new sample point.
-            verts[@intCast(nverts.* * 3)..][0..3].* = bestpt;
+            verts[@intCast(nverts.* * 3)..][0..3].* = search.position(best);
             nverts.* += 1;
 
             // Create new triangulation.
@@ -1277,6 +1326,8 @@ pub fn buildPolyMeshDetail(
     var samples: std.ArrayList(i32) = .empty;
     defer samples.deinit(gpa);
     try samples.ensureTotalCapacity(gpa, 512);
+    var search: SampleSearch = .{};
+    defer search.deinit(gpa);
     var verts: [256 * 3]f32 = undefined;
     var n_poly_verts: i32 = 0;
     var maxhw: i32 = 0;
@@ -1411,6 +1462,7 @@ pub fn buildPolyMeshDetail(
             &tris,
             &edges,
             &samples,
+            &search,
         );
 
         const nverts_used: usize = @intCast(nverts);
@@ -1579,6 +1631,94 @@ test "jitter wraps the multiply as unsigned" {
     try testing.expect(getJitterY(-3) >= -1.0 and getJitterY(-3) <= 1.0);
 }
 
+/// Upstream's `distToTriMesh`, one sample and one triangle at a time.
+fn distToTriMeshScalar(p: *const [3]f32, verts: []const f32, tris: []const i32) f32 {
+    var dmin = flt_max;
+    var t: usize = 0;
+    while (t < tris.len) : (t += 4) {
+        const a = point(verts, tris[t + 0]);
+        const b = point(verts, tris[t + 1]);
+        const c = point(verts, tris[t + 2]);
+        const v0 = recast.vsub(c, a);
+        const v1 = recast.vsub(b, a);
+        const v2 = recast.vsub(p, a);
+        const dot00 = vdot2(&v0, &v0);
+        const dot01 = vdot2(&v0, &v1);
+        const dot02 = vdot2(&v0, &v2);
+        const dot11 = vdot2(&v1, &v1);
+        const dot12 = vdot2(&v1, &v2);
+        const inv_denom = 1.0 / (dot00 * dot11 - dot01 * dot01);
+        const u = (dot11 * dot02 - dot01 * dot12) * inv_denom;
+        const v = (dot00 * dot12 - dot01 * dot02) * inv_denom;
+        const eps: f32 = 1e-4;
+        var d = flt_max;
+        if (u >= -eps and v >= -eps and (u + v) <= 1 + eps) {
+            const y = a[1] + v0[1] * u + v1[1] * v;
+            d = @abs(y - p[1]);
+        }
+        if (d < dmin) dmin = d;
+    }
+    return dmin;
+}
+
+test "the sample search measures each sample as upstream's distToTriMesh" {
+    const gpa = testing.allocator;
+    var prng: std.Random.DefaultPrng = .init(0x5a3c);
+    const random = prng.random();
+    var search: SampleSearch = .{};
+    defer search.deinit(gpa);
+    var verts: [3 * 48]f32 = undefined;
+    var tris: [4 * 16]i32 = undefined;
+    var samples: [4 * 301]i32 = undefined;
+    for (0..200) |_| {
+        for (&verts) |*v| v.* = (random.float(f32) - 0.5) * 100;
+        // Some triangles flat or with a vertex twice.
+        verts[3..6].* = verts[0..3].*;
+        for (verts[6..9], verts[0..3], verts[9..12]) |*v, a, b| v.* = (a + b) * 0.5;
+        for (&tris, 0..) |*t, i| t.* = if (i % 4 == 3) 0 else random.intRangeLessThan(i32, 0, 16);
+        tris[0..3].* = .{ 0, 1, 2 };
+        tris[4..7].* = .{ 0, 2, 3 };
+        const nsamples = random.intRangeAtMost(usize, 1, 301);
+        for (0..nsamples) |i| {
+            samples[i * 4 ..][0..4].* = .{
+                random.intRangeAtMost(i32, -30, 30),
+                random.intRangeAtMost(i32, 0, 50),
+                random.intRangeAtMost(i32, -30, 30),
+                0,
+            };
+        }
+        try search.place(gpa, samples[0 .. nsamples * 4], 1.7, 0.3, 0.2);
+        // Half the samples moved onto the edges of the tolerance around a
+        // triangle: one barycentric coordinate at -1e-4 or their sum at
+        // 1 + 1e-4, give or take a little.
+        for (0..nsamples / 2) |i| {
+            const t = random.uintLessThan(usize, 16) * 4;
+            const a = point(&verts, tris[t + 0]);
+            const b = point(&verts, tris[t + 1]);
+            const c = point(&verts, tris[t + 2]);
+            const near = 1e-4 * (1 + (random.float(f32) - 0.5) * 0.2);
+            var u = random.float(f32);
+            var v = random.float(f32) * (1 - u);
+            switch (random.uintLessThan(u8, 3)) {
+                0 => u = -near,
+                1 => v = -near,
+                else => v = 1 + near - u,
+            }
+            search.xs.items[i] = a[0] + (c[0] - a[0]) * u + (b[0] - a[0]) * v;
+            search.zs.items[i] = a[2] + (c[2] - a[2]) * u + (b[2] - a[2]) * v;
+        }
+        search.measure(&verts, &tris);
+        for (0..nsamples) |i| {
+            const p = search.position(i);
+            const expected = distToTriMeshScalar(&p, &verts, &tris);
+            try testing.expectEqual(
+                @as(u32, @bitCast(expected)),
+                @as(u32, @bitCast(search.dmin.items[i])),
+            );
+        }
+    }
+}
+
 test "a polygon with no samples triangulates its own vertices" {
     // A square one cell above a flat patch: with sample_dist 0 the hull is
     // the four corners and the triangulation two triangles.
@@ -1596,6 +1736,8 @@ test "a polygon with no samples triangulates its own vertices" {
     defer edges.deinit(testing.allocator);
     var samples: std.ArrayList(i32) = .empty;
     defer samples.deinit(testing.allocator);
+    var search: SampleSearch = .{};
+    defer search.deinit(testing.allocator);
     try buildPolyDetail(
         .none,
         testing.allocator,
@@ -1611,6 +1753,7 @@ test "a polygon with no samples triangulates its own vertices" {
         &tris,
         &edges,
         &samples,
+        &search,
     );
     try testing.expectEqual(4, nverts);
     try testing.expectEqual(8, tris.items.len);

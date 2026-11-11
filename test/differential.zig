@@ -815,6 +815,7 @@ test "detail meshes match for every sample distance and error" {
         return error.TestUnexpectedResult;
     defer upstream.shim_polymesh_free(original_pmesh);
     try logs.expectSame("polymesh");
+    var most_verts: u32 = 0;
     // A sample distance of 0 never finishes in the original.
     for ([_]f32{ 0.3, 0.9, 1.8, 5 }) |sample_dist| {
         for ([_]f32{ 0, 0.05, 0.2, 1 }) |sample_max_error| {
@@ -837,8 +838,13 @@ test "detail meshes match for every sample distance and error" {
             defer upstream.shim_detail_free(original_dmesh);
             try logs.expectSame("detail");
             try expectSameDump("detail", &dmesh, original_dmesh);
+            for (0..@intCast(dmesh.nmeshes)) |m| {
+                most_verts = @max(most_verts, dmesh.meshes[m * 4 + 1]);
+            }
         }
     }
+    // Some polygon took all the vertices a detail mesh can hold.
+    try testing.expectEqual(127, most_verts);
 }
 
 test "walkable triangles match at every slope" {
@@ -1447,6 +1453,42 @@ fn buildOriginalTile(
         cfg.detail_sample_max_error,
     ) orelse return error.TestUnexpectedResult;
     return .{ .pmesh = pmesh, .dmesh = dmesh };
+}
+
+test "Loomwork's tiles on rolling ground build the same, a hundred detail vertices a polygon" {
+    var mesh = try meshes.vale(gpa, 128);
+    defer mesh.deinit(gpa);
+    var bmin: [3]f32 = undefined;
+    var bmax: [3]f32 = undefined;
+    recast.calcBounds(mesh.verts, &bmin, &bmax);
+    // Loomwork's default character on its 64 m tiles.
+    const settings: TileSettings = .{
+        .cell_size = 0.125,
+        .max_slope_degrees = 50,
+        .agent_height = 1.8,
+        .agent_climb = 0.3,
+        .agent_radius = 0.35,
+        .tile_size = 64,
+    };
+    var logs = try Logs.init();
+    defer logs.deinit();
+    var most_verts: u32 = 0;
+    for (0..4) |i| {
+        const cfg = tileConfig(settings, bmin, bmax, @intCast(i % 2), @intCast(i / 2));
+        var original = try buildOriginalTile(logs.original, &mesh, &cfg);
+        defer original.deinit();
+        var port = try buildPortTile(logs.port(), gpa, &mesh, &cfg);
+        defer port.deinit(gpa);
+        try logs.expectSame("tile");
+        try expectSameDump("tile polymesh", &port.pmesh, original.pmesh);
+        try expectSameDump("tile detail", &port.dmesh, original.dmesh);
+        for (0..@intCast(port.dmesh.nmeshes)) |m| {
+            most_verts = @max(most_verts, port.dmesh.meshes[m * 4 + 1]);
+        }
+    }
+    // The search for the sample furthest from the surface added over a
+    // hundred vertices to a polygon.
+    try testing.expect(most_verts > 100);
 }
 
 /// A tile built on a pool thread, with its dumps.
