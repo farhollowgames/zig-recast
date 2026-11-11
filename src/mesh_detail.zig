@@ -1350,6 +1350,32 @@ fn lowByte(value: i32) u8 {
     return @truncate(@as(u32, @bitCast(value)));
 }
 
+/// Logs and refuses the first polygon of `pmesh` with more vertices than a
+/// detail mesh holds, which only a poly mesh with an `nvp` past
+/// `max_detail_verts` can have. Marked cold so that it stays out of line:
+/// written inside `buildPolyMeshDetail`, its loop and log changed which
+/// helpers the compiler inlined there, and the build ran up to a fifth
+/// slower.
+fn refuseLargePolygons(
+    ctx: Context,
+    pmesh: *const PolyMesh,
+) error{TooManyPolygonVertices}!void {
+    @branchHint(.cold);
+    const nvp: usize = @intCast(pmesh.nvp);
+    for (0..@intCast(pmesh.npolys)) |i| {
+        const p = pmesh.polys[i * nvp * 2 ..][0..nvp];
+        const n = std.mem.findScalar(u16, p, recast.mesh_null_idx) orelse nvp;
+        if (n <= max_detail_verts) continue;
+        ctx.log(
+            .err,
+            "rcBuildPolyMeshDetail: Polygon {d} has {d} vertices, more than the {d} a " ++
+                "detail mesh holds.",
+            .{ i, n, max_detail_verts },
+        );
+        return error.TooManyPolygonVertices;
+    }
+}
+
 /// Builds a detail mesh over each polygon of `pmesh`, with heights from
 /// `chf`: samples `sample_dist` apart (0 for none, only the polygons' own
 /// vertices) are added where the surface strays more than
@@ -1372,20 +1398,7 @@ pub fn buildPolyMeshDetail(
 
     const nvp: usize = @intCast(pmesh.nvp);
     const npolys: usize = @intCast(pmesh.npolys);
-    if (nvp > max_detail_verts) {
-        for (0..npolys) |i| {
-            const p = pmesh.polys[i * nvp * 2 ..][0..nvp];
-            const n = std.mem.findScalar(u16, p, recast.mesh_null_idx) orelse nvp;
-            if (n <= max_detail_verts) continue;
-            ctx.log(
-                .err,
-                "rcBuildPolyMeshDetail: Polygon {d} has {d} vertices, more than the {d} a " ++
-                    "detail mesh holds.",
-                .{ i, n, max_detail_verts },
-            );
-            return error.TooManyPolygonVertices;
-        }
-    }
+    if (nvp > max_detail_verts) try refuseLargePolygons(ctx, pmesh);
     const cs = pmesh.cs;
     const ch = pmesh.ch;
     const orig = &pmesh.bmin;
