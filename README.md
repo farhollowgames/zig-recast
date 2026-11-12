@@ -1,19 +1,20 @@
 # zig-recast
 
-Tracks recastnavigation 1.6.0 (Recast) · Zig 0.17 · [status](STATUS.md)
-
-## What it is
-
-A Zig port of Recast, the navigation mesh builder of
-[recastnavigation](#licence-and-references). It turns triangle meshes into
-navigation meshes: it voxelizes the level, finds where an agent of a given
-size can stand and walk, splits that into regions and turns them into
-convex polygons, with a detail mesh that follows the ground's height. It is
-pure Zig, with no dependencies beyond the standard library.
+Ported from recastnavigation 1.6.0 (`9f4ce64`): Recast · Zig 0.17.0 · [status](STATUS.md)
 
 This port is not affiliated with or reviewed by the original authors. Its
 code was written with AI assistance for Farhollow Games, and is only machine
 verified. See [the tests](doc/TESTING.md) and [parity with the original](doc/parity.md).
+
+## What it is
+
+A Zig port of Recast, the navigation mesh builder of Mikko Mononen's
+recastnavigation. It turns triangle meshes into navigation meshes: it
+voxelizes the level, finds where an agent of a given size can stand and
+walk, splits that into regions and turns them into convex polygons, with a
+detail mesh that follows the ground's height. It is pure Zig, with no
+dependencies beyond the standard library. The original is listed under
+[References](#references).
 
 ## Features
 
@@ -37,7 +38,7 @@ verified. See [the tests](doc/TESTING.md) and [parity with the original](doc/par
 zig fetch --save git+https://github.com/farhollowgames/zig-recast#v0.1.1
 ```
 
-`v0.1.1` is the latest release.
+`v0.1.1` is the latest release. The package needs Zig 0.17.0.
 
 In `build.zig`:
 
@@ -134,9 +135,9 @@ The reasons are in [`doc/parity.md`](doc/parity.md#where-the-port-differs).
 *Additions*:
 
 - `recast.cosf`, the port's copy of glibc's single-precision cosine, which
-  the slope functions use.
-- `cosf` is computed in Zig with fused multiply-adds, so it gives the same
-  bits on every machine, where the original's depends on the C library.
+  the slope functions use. It is computed in Zig with fused multiply-adds,
+  so it gives the same bits on every machine, where the original's depends
+  on the C library.
 - `recast.truncateToInt`, C's `(int)` of a float, with x86-64's result
   where C leaves it undefined.
 - `recast.vertex_cells_max`, the limit of the vertex range that
@@ -172,52 +173,74 @@ The reasons are in [`doc/parity.md`](doc/parity.md#where-the-port-differs).
 - The slope thresholds use glibc's cosine on every platform.
 - Sorting is stable, as glibc's `qsort` is.
 
-## Not included
+## Left out
 
-The parts of the original that are left out, each with what takes its place,
-are listed in [`STATUS.md`](STATUS.md#left-out).
+The parts of the original that are left out, each with what takes its
+place, are listed in [`STATUS.md`](STATUS.md#left-out). In short:
 
-## Testing and benchmarks
+- Helpers the language has (`rcSwap`, `rcAbs`, `rcSqr`, `rcVcopy`,
+  `rcIgnoreUnused`), and the compiler hints `rcLikely` and `rcUnlikely`.
+- The allocator hooks and scoped pointers (`rcAlloc`, `rcFree`,
+  `rcScopedDelete` and the rest): every function that allocates takes a
+  `std.mem.Allocator`, and `defer` frees.
+- `rcVectorBase`, `rcTempVector` and `rcPermVector`: `std.ArrayList`.
+- `rcAssert` and its hooks: `std.debug.assert` and the panic handler.
+- DebugUtils (`RecastDebugDraw`, `RecastDump`), which is RecastDemo's, not
+  part of Recast's library.
+
+## Tests
 
 `zig build test` runs 81 tests. 56 run the original beside the port on the
-same inputs and compare their results: the structures each step builds, byte for byte, and
-every log message, timer call and returned value. The other 25 test the
-port alone. The inputs are RecastDemo's meshes, generated terrains,
-hand-made edge cases, upstream's own tests and seeded fuzzing.
-
-Port time against original time, the best and the worst over seven
-inputs from RecastDemo's meshes to a 1 km tiled terrain:
-
-| feature | port vs original |
-| --- | ---: |
-| Whole build | 62% faster to 8% faster |
-| Rasterization, int indices | 10% faster to 4% faster |
-| Distance field | 9% slower to 30% slower |
-| Watershed regions | 42% faster to 7% faster |
-| Detail mesh | 91% faster to 24% faster |
-
-AMD Ryzen 9 9950X3D, one core, Linux 7.3.3, Zig 0.17.0 ReleaseFast against
-clang 22.1.8 `-O3`, at commit `c14a021`, with a load average of at most 3.0
-on 32 hardware threads; the median of three runs.
+same inputs and compare their results: the structures each step builds,
+byte for byte, and every log message, timer call and returned value. The
+other 25 test the port alone. The inputs are RecastDemo's meshes, generated
+terrains, hand-made edge cases, upstream's own tests and seeded fuzzing.
 
 - [`doc/TESTING.md`](doc/TESTING.md): how the tests compare the port with
   the original, and what this repository's tests cover.
-- [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md): ratios and full tables: every feature's table, the
+- [`doc/parity.md`](doc/parity.md): every function of the original mapped to
+  the port's, and where the port differs.
+
+## Speed
+
+Port time against original time, one core, the lowest and the highest over
+seven inputs from RecastDemo's meshes to a 1 km tiled terrain:
+
+| feature | time, port / original | port vs original |
+| --- | ---: | ---: |
+| Whole build | 0.38 to 0.92 | 62% to 8% faster |
+| Rasterization, int indices | 0.90 to 0.96 | 10% to 4% faster |
+| Distance field | 1.09 to 1.30 | 9% to 30% slower |
+| Watershed regions | 0.58 to 0.93 | 42% to 7% faster |
+| Detail mesh | 0.09 to 0.76 | 91% to 24% faster |
+
+The distance field is the slowest feature, the larger the field the slower.
+Grid size (1.17 to 1.19) and a few small steps are also slower on some
+inputs, up to 12%.
+
+AMD Ryzen 9 9950X3D, one core, Linux 7.3.3, Zig 0.17.0 ReleaseFast against
+clang 22.1.8 `-O3`, at commit `c14a021`; each figure the median of 7 runs; a
+load average of at most 3.0 on 32 hardware threads.
+
+- [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md): every feature's table, the
   flags on both sides, the biases and the command.
 
-## Licence and references
+## Licence
 
 zlib licence, the original's ([`LICENSE`](LICENSE)). zig-recast is an
 altered version of Recast: the code is rewritten in Zig, with its own
-interface. The original's licence and copyright notice are kept in
-`LICENSE` as they are: "Copyright (c) 2009 Mikko Mononen memon@inside.org".
-`src/cosf.zig` is translated from Arm's optimized-routines and is used
-under the MIT licence; its text and Arm's copyright notice are in `LICENSE`
-too.
+interface. The original's licence and its notice, "Copyright (c) 2009 Mikko
+Mononen memon@inside.org", are kept in `LICENSE` as they are, beside
+"Copyright (c) 2026 Farhollow Games". `src/cosf.zig` is translated from
+Arm's optimized-routines and is used under the MIT licence; its text and
+Arm's copyright notice are in `LICENSE` too.
+
+## References
 
 - [recastnavigation](https://github.com/recastnavigation/recastnavigation),
   the original, by [Mikko Mononen](https://github.com/memononen) and the
-  recastnavigation contributors.
+  recastnavigation contributors, tag `v1.6.0` (`9f4ce64`), fetched as a lazy
+  dependency for the tests and the benchmark only.
 - [recastnav.com](https://recastnav.com), its documentation.
 - Eric Lengyel's
   [edge list for an arbitrary mesh](https://web.archive.org/web/20080704083314/http://www.terathon.com/code/edges.php),
