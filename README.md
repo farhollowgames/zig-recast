@@ -11,9 +11,9 @@ size can stand and walk, splits that into regions and turns them into
 convex polygons, with a detail mesh that follows the ground's height. It is
 pure Zig, with no dependencies beyond the standard library.
 
-This port is not affiliated with or reviewed by the recastnavigation
-authors. Its code was written with AI assistance (Claude, Anthropic's
-model) for Farhollow Games, and has not yet been reviewed by a person.
+This port is not affiliated with or reviewed by the original authors. Its
+code was written with AI assistance for Farhollow Games, and is only machine
+verified. See [the tests](doc/TESTING.md) and [parity with the original](doc/parity.md).
 
 ## Features
 
