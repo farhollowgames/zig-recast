@@ -183,17 +183,16 @@ every log message, timer call and returned value. The other 25 test the
 port alone. The inputs are RecastDemo's meshes, generated terrains,
 hand-made edge cases, upstream's own tests and seeded fuzzing.
 
-Port time divided by original time, the lowest and the highest over seven
-inputs from RecastDemo's meshes to a 1 km tiled terrain (below 1, the port
-takes less time):
+Port time against original time, the best and the worst over seven
+inputs from RecastDemo's meshes to a 1 km tiled terrain:
 
-| feature | port ÷ original |
+| feature | port vs original |
 | --- | ---: |
-| Whole build | 0.38 to 0.92 |
-| Rasterization, int indices | 0.90 to 0.96 |
-| Distance field | 1.09 to 1.30 |
-| Watershed regions | 0.58 to 0.93 |
-| Detail mesh | 0.09 to 0.76 |
+| Whole build | 62% faster to 8% faster |
+| Rasterization, int indices | 10% faster to 4% faster |
+| Distance field | 9% slower to 30% slower |
+| Watershed regions | 42% faster to 7% faster |
+| Detail mesh | 91% faster to 24% faster |
 
 AMD Ryzen 9 9950X3D, one core, Linux 7.3.3, Zig 0.17.0 ReleaseFast against
 clang 22.1.8 `-O3`, at commit `c14a021`, with a load average of at most 3.0
@@ -201,7 +200,7 @@ on 32 hardware threads; the median of three runs.
 
 - [`doc/TESTING.md`](doc/TESTING.md): how the tests compare the port with
   the original, and what this repository's tests cover.
-- [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md): every feature's table, the
+- [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md): ratios and full tables: every feature's table, the
   flags on both sides, the biases and the command.
 
 ## Licence and references
