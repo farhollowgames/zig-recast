@@ -37,7 +37,9 @@ verified. See [the tests](doc/TESTING.md) and [parity with the original](doc/par
 zig fetch --save git+https://github.com/farhollowgames/zig-recast#v0.1.1
 ```
 
-`v0.1.1` is the latest release. Then, in `build.zig`:
+`v0.1.1` is the latest release.
+
+In `build.zig`:
 
 ```zig
 const recast = b.dependency("recast", .{ .target = target, .optimize = optimize });
@@ -127,9 +129,10 @@ in [`src/`](src) describe each one.
 
 ## Differences from the original
 
-[`doc/parity.md`](doc/parity.md#where-the-port-differs) gives the reasons.
+The reasons are in [`doc/parity.md`](doc/parity.md#where-the-port-differs).
 
-*Additions*
+*Additions*:
+
 - `recast.cosf`, the port's copy of glibc's single-precision cosine, which
   the slope functions use.
 - `cosf` is computed in Zig with fused multiply-adds, so it gives the same
@@ -139,7 +142,8 @@ in [`src/`](src) describe each one.
 - `recast.vertex_cells_max`, the limit of the vertex range that
   rasterization accepts.
 
-*Changes to expect*
+*Changes to expect*:
+
 - A step that fails logs the original's message and returns an error,
   `error.OutOfMemory` or one named after the failure, where the original
   returns `false`.
@@ -170,15 +174,13 @@ in [`src/`](src) describe each one.
 
 ## Not included
 
-The allocator and assert hooks, `rcVector`, the branch hints, the helpers
-Zig has built in, and DebugUtils (debug drawing and dumps);
-[`STATUS.md`](STATUS.md#left-out) lists each left-out item and what takes
-its place.
+The parts of the original that are left out, each with what takes its place,
+are listed in [`STATUS.md`](STATUS.md#left-out).
 
 ## Testing and benchmarks
 
-81 tests. 56 run the original beside the port on the same inputs and
-compare their results: the structures each step builds, byte for byte, and
+`zig build test` runs 81 tests. 56 run the original beside the port on the
+same inputs and compare their results: the structures each step builds, byte for byte, and
 every log message, timer call and returned value. The other 25 test the
 port alone. The inputs are RecastDemo's meshes, generated terrains,
 hand-made edge cases, upstream's own tests and seeded fuzzing.
